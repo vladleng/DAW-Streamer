@@ -1,6 +1,7 @@
 #include "RecorderEngine.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -9,9 +10,13 @@ constexpr int kRequiredBitsPerSample = 24;
 }
 
 RecorderEngine::RecorderEngine(juce::File outputRootToUse)
-    : juce::Thread("DAW Streamer Recorder multistream"),
-      outputRootOverride(std::move(outputRootToUse))
+    : juce::Thread("DAW Streamer Recorder multistream")
 {
+    configuredOutputRoot = outputRootToUse.getFullPathName().isNotEmpty()
+        ? std::move(outputRootToUse)
+        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+              .getChildFile("DAW Streamer Recordings");
+
     for (std::size_t i = 0; i < streams.size(); ++i)
     {
         auto& stream = streams[i];
@@ -48,6 +53,33 @@ RecorderEngine::Snapshot RecorderEngine::getSnapshot() const
     return publishedSnapshot;
 }
 
+void RecorderEngine::setOutputRoot(juce::File directory)
+{
+    if (directory.getFullPathName().isEmpty())
+        return;
+
+    const juce::ScopedLock lock(configLock);
+    configuredOutputRoot = std::move(directory);
+}
+
+juce::File RecorderEngine::getOutputRoot() const
+{
+    const juce::ScopedLock lock(configLock);
+    return configuredOutputRoot;
+}
+
+void RecorderEngine::setSessionName(juce::String name)
+{
+    const juce::ScopedLock lock(configLock);
+    configuredSessionName = std::move(name).trim();
+}
+
+juce::String RecorderEngine::getSessionName() const
+{
+    const juce::ScopedLock lock(configLock);
+    return configuredSessionName;
+}
+
 void RecorderEngine::run()
 {
     while (!threadShouldExit())
@@ -62,9 +94,6 @@ void RecorderEngine::run()
 
         bool consumedAny = false;
 
-        // Stage 5A1: never stop draining an early stream while waiting for another
-        // sender. Every available stream is written immediately; a stream that
-        // appears later is aligned by host sample-time and leading silence.
         for (std::size_t i = 0; i < streams.size(); ++i)
         {
             auto& stream = streams[i];
@@ -76,6 +105,7 @@ void RecorderEngine::run()
                 continue;
 
             consumedAny = true;
+            updatePeak(i, block);
 
             if (!sessionActiveInternal)
                 continue;
@@ -176,12 +206,22 @@ void RecorderEngine::beginTake()
         stream.gapFrames = 0;
         stream.gapEvents = 0;
         stream.fileChannels = 0;
+        stream.peakLinear = 0.0f;
     }
 
-    auto root = outputRootOverride.getFullPathName().isNotEmpty()
-        ? outputRootOverride
-        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-              .getChildFile("DAW Streamer Recordings");
+    juce::File root;
+    juce::String sessionName;
+    {
+        const juce::ScopedLock lock(configLock);
+        root = configuredOutputRoot;
+        sessionName = sanitiseSessionName(configuredSessionName);
+    }
+
+    if (root.getFullPathName().isEmpty())
+    {
+        root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                   .getChildFile("DAW Streamer Recordings");
+    }
 
     const auto rootResult = root.createDirectory();
     if (rootResult.failed())
@@ -190,11 +230,24 @@ void RecorderEngine::beginTake()
         return;
     }
 
-    const auto timestamp = juce::Time::getCurrentTime().formatted("%Y-%m-%d_%H-%M-%S");
-    takeDirectory = root.getChildFile(timestamp);
+    auto sessionDirectory = root;
+    if (sessionName.isNotEmpty())
+    {
+        sessionDirectory = root.getChildFile(sessionName);
+        const auto sessionResult = sessionDirectory.createDirectory();
+        if (sessionResult.failed())
+        {
+            failTake("Cannot create session folder: " + sessionResult.getErrorMessage());
+            return;
+        }
+    }
 
-    for (int suffix = 2; takeDirectory.exists() && suffix < 100; ++suffix)
-        takeDirectory = root.getChildFile(timestamp + "_" + juce::String(suffix));
+    const auto timestamp = juce::Time::getCurrentTime().formatted("%Y-%m-%d_%H-%M-%S");
+    const auto baseTakeName = "Take_" + timestamp;
+    takeDirectory = sessionDirectory.getChildFile(baseTakeName);
+
+    for (int suffix = 2; takeDirectory.exists(); ++suffix)
+        takeDirectory = sessionDirectory.getChildFile(baseTakeName + "_" + juce::String(suffix));
 
     const auto takeResult = takeDirectory.createDirectory();
     if (takeResult.failed())
@@ -216,9 +269,36 @@ void RecorderEngine::finishTake()
         return;
     }
 
+    drainPendingAudioForStop();
+
     sessionActiveInternal = false;
     waitingForStreamsInternal = false;
     closeWriters(true);
+}
+
+void RecorderEngine::drainPendingAudioForStop()
+{
+    constexpr std::uint32_t kMaximumDrainPerStream = dawstreamer::kRingCapacity * 2;
+
+    for (std::size_t i = 0; i < streams.size(); ++i)
+    {
+        auto& stream = streams[i];
+        if (stream.transport == nullptr)
+            continue;
+
+        dawstreamer::AudioBlock block;
+        std::uint32_t drained = 0;
+
+        while (drained < kMaximumDrainPerStream && stream.transport->pop(block))
+        {
+            updatePeak(i, block);
+            handleAudioBlock(i, block);
+            ++drained;
+
+            if (!sessionActiveInternal)
+                return;
+        }
+    }
 }
 
 bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
@@ -230,7 +310,7 @@ bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
 
     if (firstBlock.sampleRate != kRequiredSampleRate)
     {
-        failTake("Stage 5A1 requires all sources at 48 kHz. Resampling is disabled.");
+        failTake("Stage 5B requires all sources at 48 kHz. Resampling is disabled.");
         return false;
     }
 
@@ -259,17 +339,11 @@ bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
         }
         else
         {
-            // A later-observed block can occasionally carry the same/earlier host
-            // boundary because plugin callbacks are scheduled independently. We
-            // cannot move already-written audio earlier, so clamp it to take zero.
             stream.takeBaseOffset = 0;
         }
     }
     else
     {
-        // Host timing is the preferred common clock. If one sender cannot expose it,
-        // join that stream at the current recorder frontier rather than moving its
-        // first audio to the beginning of the take.
         stream.takeBaseOffset = globalTakeFrontier;
     }
 
@@ -345,8 +419,6 @@ void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer
     const auto producerRelative = block.producerFrameStart - stream.producerAnchorFrame;
     auto desiredStart = stream.takeBaseOffset + producerRelative;
 
-    // If a sender disappears after it has started, the other streams advance the
-    // common frontier. On reconnect this floor preserves wall-time as silence.
     const auto syncFloor = globalTakeFrontier > block.numFrames
         ? globalTakeFrontier - block.numFrames
         : std::uint64_t { 0 };
@@ -391,6 +463,22 @@ void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer
 
     stream.framesWritten += framesToWrite;
     globalTakeFrontier = std::max(globalTakeFrontier, stream.framesWritten);
+}
+
+void RecorderEngine::updatePeak(std::size_t streamIndex,
+                                const dawstreamer::AudioBlock& block) noexcept
+{
+    auto peak = 0.0f;
+    const auto channels = std::min<std::uint32_t>(block.numChannels, dawstreamer::kMaxChannels);
+    const auto frames = std::min<std::uint32_t>(block.numFrames, dawstreamer::kMaxFramesPerBlock);
+
+    for (std::uint32_t channel = 0; channel < channels; ++channel)
+    {
+        for (std::uint32_t frame = 0; frame < frames; ++frame)
+            peak = std::max(peak, std::abs(block.samples[channel][frame]));
+    }
+
+    streams[streamIndex].peakLinear = peak;
 }
 
 bool RecorderEngine::writeSilence(StreamState& stream, std::uint64_t frames)
@@ -465,6 +553,12 @@ void RecorderEngine::publishSnapshot()
     result.takeDirectory = takeDirectory.getFullPathName();
     result.lastError = lastError;
 
+    {
+        const juce::ScopedLock lock(configLock);
+        result.outputRoot = configuredOutputRoot.getFullPathName();
+        result.sessionName = configuredSessionName;
+    }
+
     for (std::size_t i = 0; i < streams.size(); ++i)
     {
         const auto& state = streams[i];
@@ -474,6 +568,7 @@ void RecorderEngine::publishSnapshot()
         out.framesWritten = state.framesWritten;
         out.gapFrames = state.gapFrames;
         out.gapEvents = state.gapEvents;
+        out.peakLinear = state.peakLinear;
 
         if (state.transport != nullptr)
         {
@@ -502,4 +597,15 @@ void RecorderEngine::publishSnapshot()
 
     const juce::ScopedLock lock(snapshotLock);
     publishedSnapshot = std::move(result);
+}
+
+juce::String RecorderEngine::sanitiseSessionName(juce::String name)
+{
+    name = name.trim();
+    name = name.replaceCharacters("<>:\"/\\|?*", "_________");
+
+    if (name.length() > 80)
+        name = name.substring(0, 80);
+
+    return name.trim();
 }
