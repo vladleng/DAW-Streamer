@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - stage-5a-plugin-transport-control
+      - stage-5a1-startup-drop-fix
   pull_request:
     branches:
       - main
@@ -28,10 +28,10 @@ jobs:
       - name: Test Release
         run: ctest --preset windows-x64-release --output-on-failure
 
-      - name: Upload Stage 5A binaries
+      - name: Upload Stage 5A1 binaries
         uses: actions/upload-artifact@v4
         with:
-          name: DAW-Streamer-stage5a-windows-x64
+          name: DAW-Streamer-stage5a1-windows-x64
           if-no-files-found: error
           path: |
             build/windows-x64/**/Release/VST3/DAW Streamer.vst3/**
