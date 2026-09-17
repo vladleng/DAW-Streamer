@@ -4,7 +4,7 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
     : AudioProcessorEditor(processorToUse),
       processor(processorToUse)
 {
-    setSize(560, 430);
+    setSize(560, 520);
     snapshot = processor.getDiagnosticsSnapshot();
     previousProcessBlockCount = snapshot.processBlockCount;
     startTimerHz(10);
@@ -34,13 +34,13 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer — Stage 2 Diagnostics", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer — Stage 3 Transport", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
 
     auto y = 62;
-    constexpr int lineHeight = 27;
+    constexpr int lineHeight = 25;
 
     const auto drawLine = [&graphics, &y](const juce::String& name, const juce::String& value)
     {
@@ -54,6 +54,10 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     const auto callbackText = callbacksActive ? "RUNNING" : "NO CALLBACKS";
     drawLine("processBlock", callbackText);
     drawLine("Callback count", juce::String(snapshot.processBlockCount));
+    drawLine("Shared transport", yesNo(snapshot.transportOpen));
+    drawLine("Queued blocks", juce::String(snapshot.transportPendingBlocks));
+    drawLine("Dropped blocks", juce::String(snapshot.transportDroppedBlocks));
+    drawLine("Oversized blocks", juce::String(snapshot.transportOversizedBlocks));
     drawLine("Host is playing", snapshot.positionAvailable ? yesNo(snapshot.isPlaying) : "N/A");
     drawLine("AudioPlayHead", yesNo(snapshot.playHeadAvailable));
     drawLine("PositionInfo", yesNo(snapshot.positionAvailable));
@@ -72,6 +76,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("Keep this window open while testing Play, Stop, bypass, mute and Song switching.",
+    graphics.drawText("Stage 3 uses one sender instance only. Keep the plugin enabled while recording.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }

@@ -111,9 +111,18 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         hasTimeSignature.store(false, std::memory_order_relaxed);
     }
 
+    // Stage 3 sender. This is intentionally only a fixed-size memory copy plus
+    // lock-free atomic cursor updates. It never waits for the Recorder.
+    const auto totalInputChannels = getTotalNumInputChannels();
+    const auto sampleRate = static_cast<std::uint32_t>(currentSampleRate.load(std::memory_order_relaxed) + 0.5);
+
+    audioTransport.push(buffer.getArrayOfReadPointers(),
+                        static_cast<std::uint32_t>(totalInputChannels),
+                        static_cast<std::uint32_t>(buffer.getNumSamples()),
+                        sampleRate);
+
     // True pass-through: input samples are left untouched. Clear only any
     // hypothetical output-only channels for safety.
-    const auto totalInputChannels = getTotalNumInputChannels();
     const auto totalOutputChannels = getTotalNumOutputChannels();
 
     for (auto channel = totalInputChannels; channel < totalOutputChannels; ++channel)
@@ -146,6 +155,11 @@ DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDia
     result.lastNumSamples = currentNumSamples.load(std::memory_order_relaxed);
     result.inputChannels = currentInputChannels.load(std::memory_order_relaxed);
     result.outputChannels = currentOutputChannels.load(std::memory_order_relaxed);
+
+    result.transportOpen = audioTransport.isOpen();
+    result.transportPendingBlocks = audioTransport.pendingBlocks();
+    result.transportDroppedBlocks = audioTransport.droppedBlocks();
+    result.transportOversizedBlocks = audioTransport.oversizedBlocks();
     return result;
 }
 

@@ -5,6 +5,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "SharedAudioTransport.h"
+
 class DAWStreamerAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -33,6 +35,11 @@ public:
         int lastNumSamples = 0;
         int inputChannels = 0;
         int outputChannels = 0;
+
+        bool transportOpen = false;
+        std::uint64_t transportPendingBlocks = 0;
+        std::uint64_t transportDroppedBlocks = 0;
+        std::uint64_t transportOversizedBlocks = 0;
     };
 
     DAWStreamerAudioProcessor();
@@ -65,6 +72,8 @@ public:
     DiagnosticsSnapshot getDiagnosticsSnapshot() const noexcept;
 
 private:
+    dawstreamer::SharedAudioTransport audioTransport;
+
     std::atomic<std::uint64_t> processBlockCount { 0 };
     std::atomic<bool> playHeadAvailable { false };
     std::atomic<bool> positionAvailable { false };
