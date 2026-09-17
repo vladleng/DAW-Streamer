@@ -1,7 +1,6 @@
 #include "RecorderEngine.h"
 
 #include <algorithm>
-#include <limits>
 
 namespace
 {
@@ -9,8 +8,9 @@ constexpr std::uint32_t kRequiredSampleRate = 48000;
 constexpr int kRequiredBitsPerSample = 24;
 }
 
-RecorderEngine::RecorderEngine()
-    : juce::Thread("DAW Streamer Recorder multistream")
+RecorderEngine::RecorderEngine(juce::File outputRootToUse)
+    : juce::Thread("DAW Streamer Recorder multistream"),
+      outputRootOverride(std::move(outputRootToUse))
 {
     for (std::size_t i = 0; i < streams.size(); ++i)
     {
@@ -62,13 +62,13 @@ void RecorderEngine::run()
 
         bool consumedAny = false;
 
+        // Stage 5A1: never stop draining an early stream while waiting for another
+        // sender. Every available stream is written immediately; a stream that
+        // appears later is aligned by host sample-time and leading silence.
         for (std::size_t i = 0; i < streams.size(); ++i)
         {
             auto& stream = streams[i];
             if (stream.transport == nullptr)
-                continue;
-
-            if (sessionActiveInternal && waitingForStreamsInternal && stream.firstBlock.has_value())
                 continue;
 
             dawstreamer::AudioBlock block;
@@ -80,14 +80,13 @@ void RecorderEngine::run()
             if (!sessionActiveInternal)
                 continue;
 
-            if (waitingForStreamsInternal)
-                stream.firstBlock = block;
-            else
-                handleAudioBlock(i, block);
+            handleAudioBlock(i, block);
+            if (!sessionActiveInternal)
+                break;
         }
 
-        if (sessionActiveInternal && waitingForStreamsInternal)
-            tryStartTakeFromFirstBlocks();
+        if (sessionActiveInternal)
+            waitingForStreamsInternal = !allStreamsStarted();
 
         publishSnapshot();
 
@@ -151,15 +150,26 @@ void RecorderEngine::beginTake()
     closeWriters(false);
 
     globalTakeFrontier = 0;
+    takeOriginEstablished = false;
+    takeHostOriginValid = false;
+    takeHostOriginSamples = 0;
     lastError.clear();
 
     for (auto& stream : streams)
     {
         if (stream.transport != nullptr)
+        {
             stream.transport->discardPending();
+            stream.droppedBaseline = stream.transport->droppedBlocks();
+            stream.oversizedBaseline = stream.transport->oversizedBlocks();
+            stream.counterBaselineValid = true;
+        }
+        else
+        {
+            stream.counterBaselineValid = false;
+        }
 
         stream.writer.reset();
-        stream.firstBlock.reset();
         stream.producerAnchorFrame = 0;
         stream.takeBaseOffset = 0;
         stream.framesWritten = 0;
@@ -168,8 +178,10 @@ void RecorderEngine::beginTake()
         stream.fileChannels = 0;
     }
 
-    auto root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                    .getChildFile("DAW Streamer Recordings");
+    auto root = outputRootOverride.getFullPathName().isNotEmpty()
+        ? outputRootOverride
+        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+              .getChildFile("DAW Streamer Recordings");
 
     const auto rootResult = root.createDirectory();
     if (rootResult.failed())
@@ -209,67 +221,71 @@ void RecorderEngine::finishTake()
     closeWriters(true);
 }
 
-bool RecorderEngine::tryStartTakeFromFirstBlocks()
+bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
+                                                const dawstreamer::AudioBlock& firstBlock)
 {
-    for (const auto& stream : streams)
+    auto& stream = streams[streamIndex];
+    if (stream.writer != nullptr)
+        return true;
+
+    if (firstBlock.sampleRate != kRequiredSampleRate)
     {
-        if (!stream.firstBlock.has_value())
-            return false;
+        failTake("Stage 5A1 requires all sources at 48 kHz. Resampling is disabled.");
+        return false;
     }
 
-    bool allHaveHostTime = true;
-    std::int64_t minimumHostTime = std::numeric_limits<std::int64_t>::max();
-
-    for (const auto& stream : streams)
+    if (firstBlock.numChannels == 0 || firstBlock.numChannels > dawstreamer::kMaxChannels)
     {
-        const auto& block = *stream.firstBlock;
-
-        if (block.sampleRate != kRequiredSampleRate)
-        {
-            failTake("Stage 5A requires all four sources at 48 kHz. Resampling is disabled.");
-            return false;
-        }
-
-        if (block.numChannels == 0 || block.numChannels > dawstreamer::kMaxChannels)
-        {
-            failTake("Unsupported channel count on one of the streams.");
-            return false;
-        }
-
-        if (block.hostTimeValid == 0)
-            allHaveHostTime = false;
-        else
-            minimumHostTime = std::min(minimumHostTime, block.hostTimeInSamples);
+        failTake("Unsupported channel count on stream "
+                 + juce::String(dawstreamer::streamRoleName(stream.role)) + ".");
+        return false;
     }
 
-    for (std::size_t i = 0; i < streams.size(); ++i)
-    {
-        auto& stream = streams[i];
-        const auto& block = *stream.firstBlock;
-        stream.producerAnchorFrame = block.producerFrameStart;
+    stream.producerAnchorFrame = firstBlock.producerFrameStart;
 
-        if (allHaveHostTime && block.hostTimeInSamples >= minimumHostTime)
-            stream.takeBaseOffset = static_cast<std::uint64_t>(block.hostTimeInSamples - minimumHostTime);
+    if (!takeOriginEstablished)
+    {
+        takeOriginEstablished = true;
+        takeHostOriginValid = firstBlock.hostTimeValid != 0;
+        takeHostOriginSamples = firstBlock.hostTimeInSamples;
+        stream.takeBaseOffset = 0;
+    }
+    else if (takeHostOriginValid && firstBlock.hostTimeValid != 0)
+    {
+        if (firstBlock.hostTimeInSamples >= takeHostOriginSamples)
+        {
+            stream.takeBaseOffset = static_cast<std::uint64_t>(
+                firstBlock.hostTimeInSamples - takeHostOriginSamples);
+        }
         else
+        {
+            // A later-observed block can occasionally carry the same/earlier host
+            // boundary because plugin callbacks are scheduled independently. We
+            // cannot move already-written audio earlier, so clamp it to take zero.
             stream.takeBaseOffset = 0;
-
-        if (!openWriter(i, block))
-            return false;
+        }
     }
-
-    waitingForStreamsInternal = false;
-
-    for (std::size_t i = 0; i < streams.size(); ++i)
+    else
     {
-        const auto block = *streams[i].firstBlock;
-        streams[i].firstBlock.reset();
-        handleAudioBlock(i, block);
-
-        if (!sessionActiveInternal)
-            return false;
+        // Host timing is the preferred common clock. If one sender cannot expose it,
+        // join that stream at the current recorder frontier rather than moving its
+        // first audio to the beginning of the take.
+        stream.takeBaseOffset = globalTakeFrontier;
     }
 
+    if (!openWriter(streamIndex, firstBlock))
+        return false;
+
+    waitingForStreamsInternal = !allStreamsStarted();
     return true;
+}
+
+bool RecorderEngine::allStreamsStarted() const noexcept
+{
+    return std::all_of(streams.begin(), streams.end(), [](const auto& stream)
+    {
+        return stream.writer != nullptr;
+    });
 }
 
 bool RecorderEngine::openWriter(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock)
@@ -309,6 +325,10 @@ bool RecorderEngine::openWriter(std::size_t streamIndex, const dawstreamer::Audi
 void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& block)
 {
     auto& stream = streams[streamIndex];
+
+    if (stream.writer == nullptr && !startStreamFromFirstBlock(streamIndex, block))
+        return;
+
     if (stream.writer == nullptr)
         return;
 
@@ -325,6 +345,8 @@ void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer
     const auto producerRelative = block.producerFrameStart - stream.producerAnchorFrame;
     auto desiredStart = stream.takeBaseOffset + producerRelative;
 
+    // If a sender disappears after it has started, the other streams advance the
+    // common frontier. On reconnect this floor preserves wall-time as silence.
     const auto syncFloor = globalTakeFrontier > block.numFrames
         ? globalTakeFrontier - block.numFrames
         : std::uint64_t { 0 };
@@ -459,8 +481,16 @@ void RecorderEngine::publishSnapshot()
             out.producerPresent = state.transport->producerOwner() != 0;
             out.producerCallbacks = state.transport->producerCallbacks();
             out.pendingBlocks = state.transport->pendingBlocks();
-            out.droppedBlocks = state.transport->droppedBlocks();
-            out.oversizedBlocks = state.transport->oversizedBlocks();
+
+            const auto droppedNow = state.transport->droppedBlocks();
+            const auto oversizedNow = state.transport->oversizedBlocks();
+            out.droppedBlocks = state.counterBaselineValid && droppedNow >= state.droppedBaseline
+                ? droppedNow - state.droppedBaseline
+                : droppedNow;
+            out.oversizedBlocks = state.counterBaselineValid && oversizedNow >= state.oversizedBaseline
+                ? oversizedNow - state.oversizedBaseline
+                : oversizedNow;
+
             out.duplicateClaims = state.transport->duplicateClaims();
             out.sourceSampleRate = state.transport->lastSampleRate();
             out.sourceChannels = state.transport->lastNumChannels();
