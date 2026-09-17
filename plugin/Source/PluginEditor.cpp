@@ -17,12 +17,26 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
     };
     addAndMakeVisible(roleBox);
 
-    recordButton.onClick = [this] { processor.requestRecord(); };
-    stopButton.onClick = [this] { processor.requestStop(); };
-    addAndMakeVisible(recordButton);
-    addAndMakeVisible(stopButton);
+    recordStopButton.onClick = [this]
+    {
+        if (!recorderOnline)
+            return;
 
-    setSize(560, 690);
+        if (snapshot.recorderState == dawstreamer::RecorderState::idle)
+        {
+            processor.requestRecord();
+            return;
+        }
+
+        if (snapshot.recorderState == dawstreamer::RecorderState::waitingForStreams
+            || snapshot.recorderState == dawstreamer::RecorderState::recording)
+        {
+            processor.requestStop();
+        }
+    };
+    addAndMakeVisible(recordStopButton);
+
+    setSize(560, 650);
     snapshot = processor.getDiagnosticsSnapshot();
     previousProcessBlockCount = snapshot.processBlockCount;
     previousRecorderHeartbeat = snapshot.recorderHeartbeat;
@@ -36,8 +50,7 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
 void DAWStreamerAudioProcessorEditor::resized()
 {
     roleBox.setBounds(230, 58, 250, 28);
-    recordButton.setBounds(230, 100, 120, 34);
-    stopButton.setBounds(360, 100, 120, 34);
+    recordStopButton.setBounds(230, 100, 250, 36);
 }
 
 void DAWStreamerAudioProcessorEditor::timerCallback()
@@ -63,14 +76,12 @@ void DAWStreamerAudioProcessorEditor::timerCallback()
         recorderOnline = false;
     }
 
-    const auto canRecord = recorderOnline
-                        && snapshot.recorderState == dawstreamer::RecorderState::idle;
-    const auto canStop = recorderOnline
-                      && (snapshot.recorderState == dawstreamer::RecorderState::waitingForStreams
-                          || snapshot.recorderState == dawstreamer::RecorderState::recording);
+    const auto recorderIsRecording = snapshot.recorderState == dawstreamer::RecorderState::waitingForStreams
+                                  || snapshot.recorderState == dawstreamer::RecorderState::recording;
+    const auto recorderIsIdle = snapshot.recorderState == dawstreamer::RecorderState::idle;
 
-    recordButton.setEnabled(canRecord);
-    stopButton.setEnabled(canStop);
+    recordStopButton.setButtonText(recorderIsRecording ? "Stop recording" : "Record");
+    recordStopButton.setEnabled(recorderOnline && (recorderIsIdle || recorderIsRecording));
     repaint();
 }
 
@@ -90,7 +101,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer — Stage 5A", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer — Stage 5B", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
@@ -142,6 +153,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("Record/Stop controls the single Recorder session. DAW transport remains independent.",
+    graphics.drawText("The button follows the Recorder's authoritative state. DAW transport remains independent.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }

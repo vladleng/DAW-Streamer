@@ -31,6 +31,7 @@ public:
         std::uint32_t sourceSampleRate = 0;
         std::uint32_t sourceChannels = 0;
         std::uint32_t sourceBlockFrames = 0;
+        float peakLinear = 0.0f;
     };
 
     struct Snapshot
@@ -40,6 +41,8 @@ public:
         std::uint64_t takeFrames = 0;
         std::array<StreamSnapshot, dawstreamer::kStreamRoleCount> streams {};
         juce::String takeDirectory;
+        juce::String outputRoot;
+        juce::String sessionName;
         juce::String lastError;
     };
 
@@ -49,6 +52,11 @@ public:
     void startRecording() noexcept;
     void stopRecording() noexcept;
     Snapshot getSnapshot() const;
+
+    void setOutputRoot(juce::File directory);
+    juce::File getOutputRoot() const;
+    void setSessionName(juce::String name);
+    juce::String getSessionName() const;
 
 private:
     enum class Command : int
@@ -72,6 +80,7 @@ private:
         std::uint64_t oversizedBaseline = 0;
         bool counterBaselineValid = false;
         std::uint32_t fileChannels = 0;
+        float peakLinear = 0.0f;
     };
 
     void run() override;
@@ -80,14 +89,17 @@ private:
     dawstreamer::RecorderState currentSharedState() const noexcept;
     void beginTake();
     void finishTake();
+    void drainPendingAudioForStop();
     bool startStreamFromFirstBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
     bool allStreamsStarted() const noexcept;
     bool openWriter(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
     void handleAudioBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& block);
+    void updatePeak(std::size_t streamIndex, const dawstreamer::AudioBlock& block) noexcept;
     bool writeSilence(StreamState& stream, std::uint64_t frames);
     void closeWriters(bool padToCommonEnd);
     void failTake(const juce::String& message);
     void publishSnapshot();
+    static juce::String sanitiseSessionName(juce::String name);
 
     std::array<StreamState, dawstreamer::kStreamRoleCount> streams;
     std::array<float, dawstreamer::kMaxFramesPerBlock> silenceBuffer {};
@@ -101,9 +113,12 @@ private:
     bool takeHostOriginValid = false;
     std::int64_t takeHostOriginSamples = 0;
     std::uint64_t globalTakeFrontier = 0;
-    juce::File outputRootOverride;
     juce::File takeDirectory;
     juce::String lastError;
+
+    mutable juce::CriticalSection configLock;
+    juce::File configuredOutputRoot;
+    juce::String configuredSessionName;
 
     mutable juce::CriticalSection snapshotLock;
     Snapshot publishedSnapshot;
