@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 DAWStreamerAudioProcessor::DAWStreamerAudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -7,8 +8,10 @@ DAWStreamerAudioProcessor::DAWStreamerAudioProcessor()
 {
 }
 
-void DAWStreamerAudioProcessor::prepareToPlay(double, int)
+void DAWStreamerAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    currentSampleRate.store(sampleRate, std::memory_order_relaxed);
+    currentExpectedBlockSize.store(samplesPerBlock, std::memory_order_relaxed);
 }
 
 void DAWStreamerAudioProcessor::releaseResources()
@@ -32,9 +35,84 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // The host supplies the input samples in this buffer. Leaving the input
-    // channels untouched makes this processor a true pass-through effect.
-    // Clear only hypothetical output-only channels for safety.
+    processBlockCount.fetch_add(1, std::memory_order_relaxed);
+    currentNumSamples.store(buffer.getNumSamples(), std::memory_order_relaxed);
+    currentInputChannels.store(getTotalNumInputChannels(), std::memory_order_relaxed);
+    currentOutputChannels.store(getTotalNumOutputChannels(), std::memory_order_relaxed);
+
+    if (auto* playHead = getPlayHead())
+    {
+        playHeadAvailable.store(true, std::memory_order_relaxed);
+
+        if (const auto position = playHead->getPosition())
+        {
+            positionAvailable.store(true, std::memory_order_relaxed);
+            hostIsPlaying.store(position->getIsPlaying(), std::memory_order_relaxed);
+
+            if (const auto value = position->getTimeInSamples())
+            {
+                hasTimeInSamples.store(true, std::memory_order_relaxed);
+                hostTimeInSamples.store(*value, std::memory_order_relaxed);
+            }
+            else
+            {
+                hasTimeInSamples.store(false, std::memory_order_relaxed);
+            }
+
+            if (const auto value = position->getPpqPosition())
+            {
+                hasPpqPosition.store(true, std::memory_order_relaxed);
+                hostPpqPosition.store(*value, std::memory_order_relaxed);
+            }
+            else
+            {
+                hasPpqPosition.store(false, std::memory_order_relaxed);
+            }
+
+            if (const auto value = position->getBpm())
+            {
+                hasBpm.store(true, std::memory_order_relaxed);
+                hostBpm.store(*value, std::memory_order_relaxed);
+            }
+            else
+            {
+                hasBpm.store(false, std::memory_order_relaxed);
+            }
+
+            if (const auto value = position->getTimeSignature())
+            {
+                hasTimeSignature.store(true, std::memory_order_relaxed);
+                hostTimeSignatureNumerator.store(value->numerator, std::memory_order_relaxed);
+                hostTimeSignatureDenominator.store(value->denominator, std::memory_order_relaxed);
+            }
+            else
+            {
+                hasTimeSignature.store(false, std::memory_order_relaxed);
+            }
+        }
+        else
+        {
+            positionAvailable.store(false, std::memory_order_relaxed);
+            hostIsPlaying.store(false, std::memory_order_relaxed);
+            hasTimeInSamples.store(false, std::memory_order_relaxed);
+            hasPpqPosition.store(false, std::memory_order_relaxed);
+            hasBpm.store(false, std::memory_order_relaxed);
+            hasTimeSignature.store(false, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        playHeadAvailable.store(false, std::memory_order_relaxed);
+        positionAvailable.store(false, std::memory_order_relaxed);
+        hostIsPlaying.store(false, std::memory_order_relaxed);
+        hasTimeInSamples.store(false, std::memory_order_relaxed);
+        hasPpqPosition.store(false, std::memory_order_relaxed);
+        hasBpm.store(false, std::memory_order_relaxed);
+        hasTimeSignature.store(false, std::memory_order_relaxed);
+    }
+
+    // True pass-through: input samples are left untouched. Clear only any
+    // hypothetical output-only channels for safety.
     const auto totalInputChannels = getTotalNumInputChannels();
     const auto totalOutputChannels = getTotalNumOutputChannels();
 
@@ -42,14 +120,43 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         buffer.clear(channel, 0, buffer.getNumSamples());
 }
 
+DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDiagnosticsSnapshot() const noexcept
+{
+    DiagnosticsSnapshot result;
+    result.processBlockCount = processBlockCount.load(std::memory_order_relaxed);
+    result.playHeadAvailable = playHeadAvailable.load(std::memory_order_relaxed);
+    result.positionAvailable = positionAvailable.load(std::memory_order_relaxed);
+    result.isPlaying = hostIsPlaying.load(std::memory_order_relaxed);
+
+    result.hasTimeInSamples = hasTimeInSamples.load(std::memory_order_relaxed);
+    result.timeInSamples = hostTimeInSamples.load(std::memory_order_relaxed);
+
+    result.hasPpqPosition = hasPpqPosition.load(std::memory_order_relaxed);
+    result.ppqPosition = hostPpqPosition.load(std::memory_order_relaxed);
+
+    result.hasBpm = hasBpm.load(std::memory_order_relaxed);
+    result.bpm = hostBpm.load(std::memory_order_relaxed);
+
+    result.hasTimeSignature = hasTimeSignature.load(std::memory_order_relaxed);
+    result.timeSignatureNumerator = hostTimeSignatureNumerator.load(std::memory_order_relaxed);
+    result.timeSignatureDenominator = hostTimeSignatureDenominator.load(std::memory_order_relaxed);
+
+    result.sampleRate = currentSampleRate.load(std::memory_order_relaxed);
+    result.expectedBlockSize = currentExpectedBlockSize.load(std::memory_order_relaxed);
+    result.lastNumSamples = currentNumSamples.load(std::memory_order_relaxed);
+    result.inputChannels = currentInputChannels.load(std::memory_order_relaxed);
+    result.outputChannels = currentOutputChannels.load(std::memory_order_relaxed);
+    return result;
+}
+
 juce::AudioProcessorEditor* DAWStreamerAudioProcessor::createEditor()
 {
-    return nullptr;
+    return new DAWStreamerAudioProcessorEditor(*this);
 }
 
 bool DAWStreamerAudioProcessor::hasEditor() const
 {
-    return false;
+    return true;
 }
 
 const juce::String DAWStreamerAudioProcessor::getName() const
