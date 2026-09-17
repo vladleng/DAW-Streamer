@@ -30,6 +30,7 @@ target_compile_definitions(DAWStreamerPlugin
 
 target_link_libraries(DAWStreamerPlugin
     PRIVATE
+        DAWStreamerShared
         juce::juce_audio_utils
     PUBLIC
         juce::juce_recommended_config_flags

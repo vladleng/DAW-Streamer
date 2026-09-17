@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - stage-2-skeleton
+      - stage-3-audio-transport
   pull_request:
     branches:
       - main
@@ -28,10 +28,10 @@ jobs:
       - name: Test Release
         run: ctest --preset windows-x64-release --output-on-failure
 
-      - name: Upload Stage 2 binaries
+      - name: Upload Stage 3 binaries
         uses: actions/upload-artifact@v4
         with:
-          name: DAW-Streamer-stage2-windows-x64
+          name: DAW-Streamer-stage3-windows-x64
           if-no-files-found: error
           path: |
             build/windows-x64/**/Release/VST3/DAW Streamer.vst3/**

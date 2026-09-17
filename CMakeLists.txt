@@ -15,5 +15,7 @@ add_subdirectory(external/JUCE)
 
 enable_testing()
 
+add_subdirectory(shared)
 add_subdirectory(plugin)
 add_subdirectory(recorder)
+add_subdirectory(tests)

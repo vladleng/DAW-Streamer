@@ -7,6 +7,8 @@ juce_add_gui_app(DAWStreamerRecorder
 target_sources(DAWStreamerRecorder
     PRIVATE
         Source/Main.cpp
+        Source/RecorderEngine.cpp
+        Source/RecorderEngine.h
 )
 
 target_compile_definitions(DAWStreamerRecorder
@@ -17,6 +19,8 @@ target_compile_definitions(DAWStreamerRecorder
 
 target_link_libraries(DAWStreamerRecorder
     PRIVATE
+        DAWStreamerShared
+        juce::juce_audio_formats
         juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
