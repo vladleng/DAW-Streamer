@@ -152,11 +152,8 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                         ownerToken);
     }
 
-    // The producer counter advances even when a ring is full. The next successful
-    // block therefore exposes the exact missing frame interval to the Recorder.
     producerFrameCounter += numFrames;
 
-    // True pass-through: input samples are left untouched.
     const auto totalOutputChannels = getTotalNumOutputChannels();
     for (auto channel = totalInputChannels; channel < totalOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
@@ -187,6 +184,16 @@ dawstreamer::StreamRole DAWStreamerAudioProcessor::getStreamRole() const noexcep
     if (index < 0 || index >= static_cast<int>(dawstreamer::kStreamRoleCount))
         return dawstreamer::StreamRole::Vocal;
     return static_cast<dawstreamer::StreamRole>(index);
+}
+
+void DAWStreamerAudioProcessor::requestRecord() noexcept
+{
+    recorderControl.sendCommand(dawstreamer::RecorderCommand::record);
+}
+
+void DAWStreamerAudioProcessor::requestStop() noexcept
+{
+    recorderControl.sendCommand(dawstreamer::RecorderCommand::stop);
 }
 
 dawstreamer::SharedAudioTransport* DAWStreamerAudioProcessor::transportForRole(
@@ -230,6 +237,12 @@ DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDia
         result.transportOversizedBlocks = transport->oversizedBlocks();
         result.duplicateRoleClaims = transport->duplicateClaims();
     }
+
+    const auto control = recorderControl.snapshot();
+    result.recorderControlOpen = control.open;
+    result.recorderState = control.state;
+    result.recorderHeartbeat = control.heartbeat;
+    result.recorderTakeFrames = control.takeFrames;
 
     return result;
 }
