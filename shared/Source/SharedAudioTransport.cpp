@@ -17,6 +17,11 @@ namespace dawstreamer
 {
 namespace
 {
+constexpr wchar_t kVocalMapping[] = L"Local\\DAWStreamer.Stage4.Vocal";
+constexpr wchar_t kGuitarMapping[] = L"Local\\DAWStreamer.Stage4.Guitar";
+constexpr wchar_t kKeysMapping[] = L"Local\\DAWStreamer.Stage4.Keys";
+constexpr wchar_t kPlaybackMapping[] = L"Local\\DAWStreamer.Stage4.Playback";
+
 struct alignas(64) SharedControl
 {
     alignas(4) std::uint32_t magic;
@@ -31,6 +36,8 @@ struct alignas(64) SharedControl
     alignas(8) std::uint64_t droppedBlocks;
     alignas(8) std::uint64_t oversizedBlocks;
     alignas(8) std::uint64_t producerCallbacks;
+    alignas(8) std::uint64_t producerOwner;
+    alignas(8) std::uint64_t duplicateClaims;
 
     alignas(4) std::uint32_t lastSampleRate;
     alignas(4) std::uint32_t lastNumChannels;
@@ -41,6 +48,9 @@ struct alignas(64) SharedControl
 struct alignas(64) SharedSlot
 {
     std::uint64_t sequence;
+    std::uint64_t producerFrameStart;
+    std::int64_t hostTimeInSamples;
+    std::uint32_t hostTimeValid;
     std::uint32_t numFrames;
     std::uint32_t numChannels;
     std::uint32_t sampleRate;
@@ -55,9 +65,9 @@ struct SharedMemory
 };
 
 static_assert(std::atomic_ref<std::uint64_t>::is_always_lock_free,
-              "Stage 3 requires lock-free 64-bit atomics on Windows x64");
+              "Stage 4 requires lock-free 64-bit atomics on Windows x64");
 static_assert(std::atomic_ref<std::uint32_t>::is_always_lock_free,
-              "Stage 3 requires lock-free 32-bit atomics on Windows x64");
+              "Stage 4 requires lock-free 32-bit atomics on Windows x64");
 
 template <typename T>
 std::atomic_ref<T> atomicRef(T& value) noexcept
@@ -80,6 +90,32 @@ void closeMapping(HANDLE& mapping, SharedMemory*& memory) noexcept
     }
 }
 } // namespace
+
+const wchar_t* mappingNameForRole(StreamRole role) noexcept
+{
+    switch (role)
+    {
+        case StreamRole::Vocal: return kVocalMapping;
+        case StreamRole::Guitar: return kGuitarMapping;
+        case StreamRole::Keys: return kKeysMapping;
+        case StreamRole::Playback: return kPlaybackMapping;
+    }
+
+    return kVocalMapping;
+}
+
+const char* streamRoleName(StreamRole role) noexcept
+{
+    switch (role)
+    {
+        case StreamRole::Vocal: return "Vocal";
+        case StreamRole::Guitar: return "Guitar";
+        case StreamRole::Keys: return "Keys";
+        case StreamRole::Playback: return "Playback";
+    }
+
+    return "Unknown";
+}
 
 struct SharedAudioTransport::Impl
 {
@@ -123,8 +159,7 @@ struct SharedAudioTransport::Impl
         }
 
         // Another process may have created the mapping a few microseconds before
-        // finishing initialisation. This wait occurs only during construction, never
-        // on the DAW audio thread.
+        // finishing initialisation. This wait occurs only during construction.
         for (int attempt = 0; attempt < 100; ++attempt)
         {
             if (atomicRef(control.magic).load(std::memory_order_acquire) != 0)
@@ -157,6 +192,11 @@ SharedAudioTransport::SharedAudioTransport(const wchar_t* mappingName)
 {
 }
 
+SharedAudioTransport::SharedAudioTransport(StreamRole role)
+    : SharedAudioTransport(mappingNameForRole(role))
+{
+}
+
 SharedAudioTransport::~SharedAudioTransport()
 {
     delete impl;
@@ -167,12 +207,70 @@ bool SharedAudioTransport::isOpen() const noexcept
     return impl != nullptr && impl->memory != nullptr;
 }
 
+bool SharedAudioTransport::claimProducer(std::uint64_t ownerToken) noexcept
+{
+    if (!isOpen() || ownerToken == 0)
+        return false;
+
+    auto& control = impl->memory->control;
+    auto owner = atomicRef(control.producerOwner);
+    auto expected = std::uint64_t { 0 };
+
+    if (owner.compare_exchange_strong(expected,
+                                      ownerToken,
+                                      std::memory_order_acq_rel,
+                                      std::memory_order_acquire))
+        return true;
+
+    if (expected == ownerToken)
+        return true;
+
+    atomicRef(control.duplicateClaims).fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+
+void SharedAudioTransport::releaseProducer(std::uint64_t ownerToken) noexcept
+{
+    if (!isOpen() || ownerToken == 0)
+        return;
+
+    auto& owner = impl->memory->control.producerOwner;
+    auto expected = ownerToken;
+    atomicRef(owner).compare_exchange_strong(expected,
+                                             std::uint64_t { 0 },
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_acquire);
+}
+
+bool SharedAudioTransport::producerClaimedBy(std::uint64_t ownerToken) const noexcept
+{
+    return ownerToken != 0 && producerOwner() == ownerToken;
+}
+
+std::uint64_t SharedAudioTransport::producerOwner() const noexcept
+{
+    if (!isOpen())
+        return 0;
+    return atomicRef(impl->memory->control.producerOwner).load(std::memory_order_acquire);
+}
+
+std::uint64_t SharedAudioTransport::duplicateClaims() const noexcept
+{
+    if (!isOpen())
+        return 0;
+    return atomicRef(impl->memory->control.duplicateClaims).load(std::memory_order_relaxed);
+}
+
 bool SharedAudioTransport::push(const float* const* channelData,
                                 std::uint32_t numChannels,
                                 std::uint32_t numFrames,
-                                std::uint32_t sampleRate) noexcept
+                                std::uint32_t sampleRate,
+                                std::uint64_t producerFrameStart,
+                                bool hostTimeValid,
+                                std::int64_t hostTimeInSamples,
+                                std::uint64_t ownerToken) noexcept
 {
-    if (!isOpen())
+    if (!isOpen() || !producerClaimedBy(ownerToken))
         return false;
 
     auto& control = impl->memory->control;
@@ -202,6 +300,9 @@ bool SharedAudioTransport::push(const float* const* channelData,
 
     auto& slot = impl->memory->slots[writeSequence % kRingCapacity];
     slot.sequence = writeSequence;
+    slot.producerFrameStart = producerFrameStart;
+    slot.hostTimeInSamples = hostTimeInSamples;
+    slot.hostTimeValid = hostTimeValid ? 1u : 0u;
     slot.numFrames = numFrames;
     slot.numChannels = numChannels;
     slot.sampleRate = sampleRate;
@@ -247,6 +348,9 @@ bool SharedAudioTransport::pop(AudioBlock& destination) noexcept
     }
 
     destination.sequence = slot.sequence;
+    destination.producerFrameStart = slot.producerFrameStart;
+    destination.hostTimeInSamples = slot.hostTimeInSamples;
+    destination.hostTimeValid = slot.hostTimeValid;
     destination.numFrames = slot.numFrames;
     destination.numChannels = slot.numChannels;
     destination.sampleRate = slot.sampleRate;

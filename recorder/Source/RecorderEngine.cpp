@@ -1,5 +1,8 @@
 #include "RecorderEngine.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace
 {
 constexpr std::uint32_t kRequiredSampleRate = 48000;
@@ -7,8 +10,16 @@ constexpr int kRequiredBitsPerSample = 24;
 }
 
 RecorderEngine::RecorderEngine()
-    : juce::Thread("DAW Streamer Recorder transport")
+    : juce::Thread("DAW Streamer Recorder multistream")
 {
+    for (std::size_t i = 0; i < streams.size(); ++i)
+    {
+        auto& stream = streams[i];
+        stream.role = static_cast<dawstreamer::StreamRole>(i);
+        stream.transport = std::make_unique<dawstreamer::SharedAudioTransport>(stream.role);
+    }
+
+    publishSnapshot();
     startThread();
 }
 
@@ -16,7 +27,7 @@ RecorderEngine::~RecorderEngine()
 {
     signalThreadShouldExit();
     waitForThreadToExit(5000);
-    closeWriter();
+    closeWriters(false);
 }
 
 void RecorderEngine::startRecording() noexcept
@@ -31,31 +42,12 @@ void RecorderEngine::stopRecording() noexcept
 
 RecorderEngine::Snapshot RecorderEngine::getSnapshot() const
 {
-    Snapshot result;
-    result.transportOpen = transport.isOpen();
-    result.sessionActive = sessionActive.load(std::memory_order_relaxed);
-    result.writerOpen = writerOpen.load(std::memory_order_relaxed);
-    result.producerCallbacks = transport.producerCallbacks();
-    result.pendingBlocks = transport.pendingBlocks();
-    result.droppedBlocks = transport.droppedBlocks();
-    result.oversizedBlocks = transport.oversizedBlocks();
-    result.framesWritten = framesWritten.load(std::memory_order_relaxed);
-    result.sourceSampleRate = transport.lastSampleRate();
-    result.sourceChannels = transport.lastNumChannels();
-    result.sourceBlockFrames = transport.lastNumFrames();
-    result.fileSampleRate = fileSampleRate.load(std::memory_order_relaxed);
-    result.fileChannels = fileChannels.load(std::memory_order_relaxed);
-
-    const juce::ScopedLock lock(textLock);
-    result.lastFilePath = lastFilePath;
-    result.lastError = lastError;
-    return result;
+    const juce::ScopedLock lock(snapshotLock);
+    return publishedSnapshot;
 }
 
 void RecorderEngine::run()
 {
-    dawstreamer::AudioBlock block;
-
     while (!threadShouldExit())
     {
         const auto command = static_cast<Command>(
@@ -64,160 +56,386 @@ void RecorderEngine::run()
         if (command != Command::none)
             handleCommand(command);
 
-        bool consumedAnyBlock = false;
+        bool consumedAny = false;
 
-        // Bound each drain pass so GUI Record/Stop commands cannot be starved even
-        // if the producer is continuously active.
-        for (int i = 0; i < 256 && !threadShouldExit(); ++i)
+        // One block per stream per pass keeps the four queues approximately at the
+        // same cycle and makes the common frontier useful for reconnect padding.
+        for (std::size_t i = 0; i < streams.size(); ++i)
         {
-            if (!transport.pop(block))
-                break;
+            auto& stream = streams[i];
+            if (stream.transport == nullptr)
+                continue;
 
-            consumedAnyBlock = true;
+            if (sessionActiveInternal && waitingForStreamsInternal && stream.firstBlock.has_value())
+                continue;
 
-            if (sessionActive.load(std::memory_order_relaxed))
-                handleAudioBlock(block);
+            dawstreamer::AudioBlock block;
+            if (!stream.transport->pop(block))
+                continue;
+
+            consumedAny = true;
+
+            if (!sessionActiveInternal)
+                continue;
+
+            if (waitingForStreamsInternal)
+                stream.firstBlock = block;
+            else
+                handleAudioBlock(i, block);
         }
 
-        if (!consumedAnyBlock)
+        if (sessionActiveInternal && waitingForStreamsInternal)
+            tryStartTakeFromFirstBlocks();
+
+        publishSnapshot();
+
+        if (!consumedAny)
             wait(2);
     }
 
-    sessionActive.store(false, std::memory_order_relaxed);
-    closeWriter();
+    if (sessionActiveInternal)
+        finishTake();
+
+    publishSnapshot();
 }
 
 void RecorderEngine::handleCommand(Command command)
 {
     if (command == Command::start)
     {
-        closeWriter();
-        transport.discardPending();
-        framesWritten.store(0, std::memory_order_relaxed);
-        fileSampleRate.store(0, std::memory_order_relaxed);
-        fileChannels.store(0, std::memory_order_relaxed);
-
-        {
-            const juce::ScopedLock lock(textLock);
-            lastFilePath.clear();
-            lastError.clear();
-        }
-
-        sessionActive.store(true, std::memory_order_release);
+        beginTake();
         return;
     }
 
     if (command == Command::stop)
-    {
-        sessionActive.store(false, std::memory_order_release);
-        closeWriter();
-    }
+        finishTake();
 }
 
-void RecorderEngine::handleAudioBlock(const dawstreamer::AudioBlock& block)
+void RecorderEngine::beginTake()
 {
-    if (writer == nullptr && !openWriterForBlock(block))
+    closeWriters(false);
+
+    globalTakeFrontier = 0;
+    lastError.clear();
+
+    for (auto& stream : streams)
+    {
+        if (stream.transport != nullptr)
+            stream.transport->discardPending();
+
+        stream.writer.reset();
+        stream.firstBlock.reset();
+        stream.producerAnchorFrame = 0;
+        stream.takeBaseOffset = 0;
+        stream.framesWritten = 0;
+        stream.gapFrames = 0;
+        stream.gapEvents = 0;
+        stream.fileChannels = 0;
+    }
+
+    auto root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                    .getChildFile("DAW Streamer Recordings");
+
+    const auto rootResult = root.createDirectory();
+    if (rootResult.failed())
+    {
+        failTake("Cannot create recording folder: " + rootResult.getErrorMessage());
         return;
-
-    if (block.sampleRate != fileSampleRate.load(std::memory_order_relaxed)
-        || block.numChannels != fileChannels.load(std::memory_order_relaxed))
-    {
-        setError("Source format changed during the Stage 3 recording session.");
-        return;
-    }
-
-    const float* channels[dawstreamer::kMaxChannels] {};
-    for (std::uint32_t channel = 0; channel < block.numChannels; ++channel)
-        channels[channel] = block.samples[channel].data();
-
-    if (!writer->writeFromFloatArrays(channels,
-                                      static_cast<int>(block.numChannels),
-                                      static_cast<int>(block.numFrames)))
-    {
-        setError("Failed while writing WAV audio data.");
-        return;
-    }
-
-    framesWritten.fetch_add(block.numFrames, std::memory_order_relaxed);
-}
-
-bool RecorderEngine::openWriterForBlock(const dawstreamer::AudioBlock& block)
-{
-    if (block.sampleRate != kRequiredSampleRate)
-    {
-        setError("Stage 3 requires a 48 kHz source. Resampling is intentionally disabled.");
-        return false;
-    }
-
-    if (block.numChannels == 0 || block.numChannels > dawstreamer::kMaxChannels)
-    {
-        setError("Unsupported source channel count.");
-        return false;
-    }
-
-    auto directory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                         .getChildFile("DAW Streamer Recordings");
-
-    const auto directoryResult = directory.createDirectory();
-    if (directoryResult.failed())
-    {
-        setError("Cannot create recording folder: " + directoryResult.getErrorMessage());
-        return false;
     }
 
     const auto timestamp = juce::Time::getCurrentTime().formatted("%Y-%m-%d_%H-%M-%S");
-    auto file = directory.getChildFile("Stage3_" + timestamp + ".wav");
-    file.deleteFile();
+    takeDirectory = root.getChildFile(timestamp);
 
-    std::unique_ptr<juce::OutputStream> fileStream { file.createOutputStream() };
-    if (fileStream == nullptr)
+    for (int suffix = 2; takeDirectory.exists() && suffix < 100; ++suffix)
+        takeDirectory = root.getChildFile(timestamp + "_" + juce::String(suffix));
+
+    const auto takeResult = takeDirectory.createDirectory();
+    if (takeResult.failed())
     {
-        setError("Cannot create WAV file in " + directory.getFullPathName());
-        return false;
+        failTake("Cannot create take folder: " + takeResult.getErrorMessage());
+        return;
     }
 
-    juce::WavAudioFormat wavFormat;
-    using Options = juce::AudioFormatWriterOptions;
+    sessionActiveInternal = true;
+    waitingForStreamsInternal = true;
+}
 
-    auto newWriter = wavFormat.createWriterFor(
-        fileStream,
-        Options {}
-            .withSampleRate(static_cast<double>(block.sampleRate))
-            .withNumChannels(static_cast<int>(block.numChannels))
-            .withBitsPerSample(kRequiredBitsPerSample));
-
-    if (newWriter == nullptr)
+void RecorderEngine::finishTake()
+{
+    if (!sessionActiveInternal)
     {
-        setError("JUCE could not create a 24-bit WAV writer.");
-        return false;
+        closeWriters(false);
+        waitingForStreamsInternal = false;
+        return;
     }
 
-    writer = std::move(newWriter);
-    fileSampleRate.store(block.sampleRate, std::memory_order_relaxed);
-    fileChannels.store(block.numChannels, std::memory_order_relaxed);
-    writerOpen.store(true, std::memory_order_release);
+    sessionActiveInternal = false;
+    waitingForStreamsInternal = false;
+    closeWriters(true);
+}
 
+bool RecorderEngine::tryStartTakeFromFirstBlocks()
+{
+    for (const auto& stream : streams)
     {
-        const juce::ScopedLock lock(textLock);
-        lastFilePath = file.getFullPathName();
+        if (!stream.firstBlock.has_value())
+            return false;
+    }
+
+    bool allHaveHostTime = true;
+    std::int64_t minimumHostTime = std::numeric_limits<std::int64_t>::max();
+
+    for (const auto& stream : streams)
+    {
+        const auto& block = *stream.firstBlock;
+
+        if (block.sampleRate != kRequiredSampleRate)
+        {
+            failTake("Stage 4 requires all four sources at 48 kHz. Resampling is disabled.");
+            return false;
+        }
+
+        if (block.numChannels == 0 || block.numChannels > dawstreamer::kMaxChannels)
+        {
+            failTake("Unsupported channel count on one of the Stage 4 streams.");
+            return false;
+        }
+
+        if (block.hostTimeValid == 0)
+            allHaveHostTime = false;
+        else
+            minimumHostTime = std::min(minimumHostTime, block.hostTimeInSamples);
+    }
+
+    for (std::size_t i = 0; i < streams.size(); ++i)
+    {
+        auto& stream = streams[i];
+        const auto& block = *stream.firstBlock;
+        stream.producerAnchorFrame = block.producerFrameStart;
+
+        if (allHaveHostTime && block.hostTimeInSamples >= minimumHostTime)
+            stream.takeBaseOffset = static_cast<std::uint64_t>(block.hostTimeInSamples - minimumHostTime);
+        else
+            stream.takeBaseOffset = 0;
+
+        if (!openWriter(i, block))
+            return false;
+    }
+
+    waitingForStreamsInternal = false;
+
+    for (std::size_t i = 0; i < streams.size(); ++i)
+    {
+        const auto block = *streams[i].firstBlock;
+        streams[i].firstBlock.reset();
+        handleAudioBlock(i, block);
+
+        if (!sessionActiveInternal)
+            return false;
     }
 
     return true;
 }
 
-void RecorderEngine::closeWriter()
+bool RecorderEngine::openWriter(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock)
 {
-    writer.reset();
-    writerOpen.store(false, std::memory_order_release);
-}
+    auto& stream = streams[streamIndex];
+    auto file = takeDirectory.getChildFile(juce::String(dawstreamer::streamRoleName(stream.role)) + ".wav");
+    file.deleteFile();
 
-void RecorderEngine::setError(const juce::String& message)
-{
+    std::unique_ptr<juce::OutputStream> fileStream { file.createOutputStream() };
+    if (fileStream == nullptr)
     {
-        const juce::ScopedLock lock(textLock);
-        lastError = message;
+        failTake("Cannot create " + file.getFullPathName());
+        return false;
     }
 
-    sessionActive.store(false, std::memory_order_release);
-    closeWriter();
+    juce::WavAudioFormat wavFormat;
+    using Options = juce::AudioFormatWriterOptions;
+    auto newWriter = wavFormat.createWriterFor(
+        fileStream,
+        Options {}
+            .withSampleRate(static_cast<double>(firstBlock.sampleRate))
+            .withNumChannels(static_cast<int>(firstBlock.numChannels))
+            .withBitsPerSample(kRequiredBitsPerSample));
+
+    if (newWriter == nullptr)
+    {
+        failTake("JUCE could not create a 24-bit WAV writer for "
+                 + juce::String(dawstreamer::streamRoleName(stream.role)) + ".");
+        return false;
+    }
+
+    stream.writer = std::move(newWriter);
+    stream.fileChannels = firstBlock.numChannels;
+    return true;
+}
+
+void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& block)
+{
+    auto& stream = streams[streamIndex];
+    if (stream.writer == nullptr)
+        return;
+
+    if (block.sampleRate != kRequiredSampleRate || block.numChannels != stream.fileChannels)
+    {
+        failTake("Source format changed during the Stage 4 take: "
+                 + juce::String(dawstreamer::streamRoleName(stream.role)) + ".");
+        return;
+    }
+
+    if (block.producerFrameStart < stream.producerAnchorFrame)
+        return;
+
+    const auto producerRelative = block.producerFrameStart - stream.producerAnchorFrame;
+    auto desiredStart = stream.takeBaseOffset + producerRelative;
+
+    // When a sender is bypassed its processBlock stops, so its local producer counter
+    // also stops. Other streams keep advancing. On reconnect, the common frontier
+    // restores the missing wall-time as silence instead of compressing the take.
+    const auto syncFloor = globalTakeFrontier > block.numFrames
+        ? globalTakeFrontier - block.numFrames
+        : std::uint64_t { 0 };
+    desiredStart = std::max(desiredStart, syncFloor);
+
+    if (desiredStart > stream.framesWritten)
+    {
+        const auto missingFrames = desiredStart - stream.framesWritten;
+        if (!writeSilence(stream, missingFrames))
+        {
+            failTake("Failed while inserting timeline silence for "
+                     + juce::String(dawstreamer::streamRoleName(stream.role)) + ".");
+            return;
+        }
+
+        stream.gapFrames += missingFrames;
+        ++stream.gapEvents;
+    }
+
+    std::uint64_t overlap = 0;
+    if (stream.framesWritten > desiredStart)
+        overlap = stream.framesWritten - desiredStart;
+
+    if (overlap >= block.numFrames)
+        return;
+
+    const auto framesToWrite = static_cast<std::uint32_t>(block.numFrames - overlap);
+    const auto sampleOffset = static_cast<std::uint32_t>(overlap);
+
+    const float* channels[dawstreamer::kMaxChannels] {};
+    for (std::uint32_t channel = 0; channel < block.numChannels; ++channel)
+        channels[channel] = block.samples[channel].data() + sampleOffset;
+
+    if (!stream.writer->writeFromFloatArrays(channels,
+                                              static_cast<int>(block.numChannels),
+                                              static_cast<int>(framesToWrite)))
+    {
+        failTake("Failed while writing WAV audio for "
+                 + juce::String(dawstreamer::streamRoleName(stream.role)) + ".");
+        return;
+    }
+
+    stream.framesWritten += framesToWrite;
+    globalTakeFrontier = std::max(globalTakeFrontier, stream.framesWritten);
+}
+
+bool RecorderEngine::writeSilence(StreamState& stream, std::uint64_t frames)
+{
+    if (stream.writer == nullptr || stream.fileChannels == 0)
+        return false;
+
+    const float* zeroChannels[dawstreamer::kMaxChannels] {
+        silenceBuffer.data(), silenceBuffer.data()
+    };
+
+    while (frames > 0)
+    {
+        const auto chunk = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(frames, dawstreamer::kMaxFramesPerBlock));
+
+        if (!stream.writer->writeFromFloatArrays(zeroChannels,
+                                                  static_cast<int>(stream.fileChannels),
+                                                  static_cast<int>(chunk)))
+            return false;
+
+        stream.framesWritten += chunk;
+        frames -= chunk;
+    }
+
+    return true;
+}
+
+void RecorderEngine::closeWriters(bool padToCommonEnd)
+{
+    if (padToCommonEnd)
+    {
+        std::uint64_t finalFrames = globalTakeFrontier;
+        for (const auto& stream : streams)
+            finalFrames = std::max(finalFrames, stream.framesWritten);
+
+        for (auto& stream : streams)
+        {
+            if (stream.writer != nullptr && stream.framesWritten < finalFrames)
+            {
+                const auto padding = finalFrames - stream.framesWritten;
+                if (writeSilence(stream, padding))
+                {
+                    stream.gapFrames += padding;
+                    if (padding > 0)
+                        ++stream.gapEvents;
+                }
+            }
+        }
+
+        globalTakeFrontier = finalFrames;
+    }
+
+    for (auto& stream : streams)
+        stream.writer.reset();
+}
+
+void RecorderEngine::failTake(const juce::String& message)
+{
+    lastError = message;
+    sessionActiveInternal = false;
+    waitingForStreamsInternal = false;
+    closeWriters(false);
+}
+
+void RecorderEngine::publishSnapshot()
+{
+    Snapshot result;
+    result.sessionActive = sessionActiveInternal;
+    result.waitingForStreams = waitingForStreamsInternal;
+    result.takeFrames = globalTakeFrontier;
+    result.takeDirectory = takeDirectory.getFullPathName();
+    result.lastError = lastError;
+
+    for (std::size_t i = 0; i < streams.size(); ++i)
+    {
+        const auto& state = streams[i];
+        auto& out = result.streams[i];
+        out.role = state.role;
+        out.writerOpen = state.writer != nullptr;
+        out.framesWritten = state.framesWritten;
+        out.gapFrames = state.gapFrames;
+        out.gapEvents = state.gapEvents;
+
+        if (state.transport != nullptr)
+        {
+            out.transportOpen = state.transport->isOpen();
+            out.producerPresent = state.transport->producerOwner() != 0;
+            out.producerCallbacks = state.transport->producerCallbacks();
+            out.pendingBlocks = state.transport->pendingBlocks();
+            out.droppedBlocks = state.transport->droppedBlocks();
+            out.oversizedBlocks = state.transport->oversizedBlocks();
+            out.duplicateClaims = state.transport->duplicateClaims();
+            out.sourceSampleRate = state.transport->lastSampleRate();
+            out.sourceChannels = state.transport->lastNumChannels();
+            out.sourceBlockFrames = state.transport->lastNumFrames();
+        }
+    }
+
+    const juce::ScopedLock lock(snapshotLock);
+    publishedSnapshot = std::move(result);
 }
