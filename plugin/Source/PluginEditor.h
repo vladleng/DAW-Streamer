@@ -30,8 +30,7 @@ private:
     bool recorderOnline = false;
 
     juce::ComboBox roleBox;
-    juce::TextButton recordButton { "Record" };
-    juce::TextButton stopButton { "Stop" };
+    juce::TextButton recordStopButton { "Record" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DAWStreamerAudioProcessorEditor)
 };
