@@ -1,3 +1,7 @@
+#include <array>
+#include <cmath>
+#include <memory>
+
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include "RecorderEngine.h"
@@ -10,23 +14,59 @@ class MainComponent final : public juce::Component,
 public:
     MainComponent()
     {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "DAW Streamer Recorder";
+        options.filenameSuffix = "settings";
+        options.folderName = "DAW Streamer";
+        options.storageFormat = juce::PropertiesFile::storeAsXML;
+        settings = std::make_unique<juce::PropertiesFile>(options);
+
+        const auto defaultRoot = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                     .getChildFile("DAW Streamer Recordings");
+        const auto storedRoot = settings->getValue("outputRoot", defaultRoot.getFullPathName());
+        const auto storedSession = settings->getValue("sessionName", "Show");
+
+        engine.setOutputRoot(juce::File(storedRoot));
+        engine.setSessionName(storedSession);
+
         title.setText("DAW Streamer Recorder", juce::dontSendNotification);
         title.setFont(juce::FontOptions(24.0f, juce::Font::bold));
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Stage 5A1 — immediate stream recording + late-stream alignment",
+        stage.setText("Stage 5B — recording folder, session takes and live diagnostics",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
 
-        recordButton.setButtonText("Record");
-        recordButton.onClick = [this] { engine.startRecording(); };
-        addAndMakeVisible(recordButton);
+        sessionLabel.setText("Show / session", juce::dontSendNotification);
+        addAndMakeVisible(sessionLabel);
 
-        stopButton.setButtonText("Stop");
-        stopButton.onClick = [this] { engine.stopRecording(); };
-        addAndMakeVisible(stopButton);
+        sessionEditor.setText(storedSession, false);
+        sessionEditor.setSelectAllWhenFocused(true);
+        sessionEditor.onTextChange = [this]
+        {
+            engine.setSessionName(sessionEditor.getText());
+            persistSettings();
+        };
+        addAndMakeVisible(sessionEditor);
+
+        folderLabel.setText("Recording folder", juce::dontSendNotification);
+        addAndMakeVisible(folderLabel);
+
+        browseButton.setButtonText("Choose...");
+        browseButton.onClick = [this] { chooseOutputFolder(); };
+        addAndMakeVisible(browseButton);
+
+        recordStopButton.onClick = [this]
+        {
+            const auto snapshot = engine.getSnapshot();
+            if (snapshot.sessionActive)
+                engine.stopRecording();
+            else
+                engine.startRecording();
+        };
+        addAndMakeVisible(recordStopButton);
 
         status.setJustificationType(juce::Justification::centred);
         status.setFont(juce::FontOptions(18.0f, juce::Font::bold));
@@ -36,49 +76,116 @@ public:
         details.setFont(juce::FontOptions(13.0f));
         addAndMakeVisible(details);
 
-        filePath.setJustificationType(juce::Justification::topLeft);
-        filePath.setFont(juce::FontOptions(13.0f));
-        addAndMakeVisible(filePath);
+        outputPath.setJustificationType(juce::Justification::topLeft);
+        outputPath.setFont(juce::FontOptions(13.0f));
+        addAndMakeVisible(outputPath);
 
-        setSize(960, 540);
+        takePath.setJustificationType(juce::Justification::topLeft);
+        takePath.setFont(juce::FontOptions(13.0f));
+        addAndMakeVisible(takePath);
+
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        lastCallbackChangeMs.fill(now);
+
+        setSize(1040, 650);
         startTimerHz(5);
         timerCallback();
+    }
+
+    ~MainComponent() override
+    {
+        persistSettings();
     }
 
     void resized() override
     {
         auto area = getLocalBounds().reduced(24);
         title.setBounds(area.removeFromTop(42));
-        stage.setBounds(area.removeFromTop(30));
+        stage.setBounds(area.removeFromTop(28));
         area.removeFromTop(10);
 
-        auto buttons = area.removeFromTop(42);
-        const auto buttonWidth = 140;
-        const auto gap = 16;
-        const auto totalWidth = buttonWidth * 2 + gap;
-        auto centredButtons = buttons.withSizeKeepingCentre(totalWidth, buttons.getHeight());
-        recordButton.setBounds(centredButtons.removeFromLeft(buttonWidth));
-        centredButtons.removeFromLeft(gap);
-        stopButton.setBounds(centredButtons.removeFromLeft(buttonWidth));
+        auto sessionRow = area.removeFromTop(34);
+        sessionLabel.setBounds(sessionRow.removeFromLeft(120));
+        sessionRow.removeFromLeft(8);
+        sessionEditor.setBounds(sessionRow.removeFromLeft(300));
+
+        area.removeFromTop(8);
+        auto folderRow = area.removeFromTop(34);
+        folderLabel.setBounds(folderRow.removeFromLeft(120));
+        folderRow.removeFromLeft(8);
+        browseButton.setBounds(folderRow.removeFromLeft(120));
 
         area.removeFromTop(12);
+        auto controls = area.removeFromTop(44);
+        recordStopButton.setBounds(controls.withSizeKeepingCentre(180, 40));
+
+        area.removeFromTop(8);
         status.setBounds(area.removeFromTop(34));
         area.removeFromTop(8);
-        details.setBounds(area.removeFromTop(250));
+        details.setBounds(area.removeFromTop(300));
         area.removeFromTop(8);
-        filePath.setBounds(area);
+        outputPath.setBounds(area.removeFromTop(24));
+        takePath.setBounds(area.removeFromTop(24));
     }
 
 private:
+    void chooseOutputFolder()
+    {
+        fileChooser = std::make_unique<juce::FileChooser>(
+            "Choose DAW Streamer recording folder",
+            engine.getOutputRoot());
+
+        const auto flags = juce::FileBrowserComponent::openMode
+                         | juce::FileBrowserComponent::canSelectDirectories;
+
+        fileChooser->launchAsync(flags, [this](const juce::FileChooser& chooser)
+        {
+            const auto selected = chooser.getResult();
+            if (selected.getFullPathName().isNotEmpty())
+            {
+                engine.setOutputRoot(selected);
+                persistSettings();
+            }
+            fileChooser.reset();
+        });
+    }
+
+    void persistSettings()
+    {
+        if (settings == nullptr)
+            return;
+
+        settings->setValue("outputRoot", engine.getOutputRoot().getFullPathName());
+        settings->setValue("sessionName", sessionEditor.getText());
+        settings->saveIfNeeded();
+    }
+
+    static juce::String peakText(float peakLinear)
+    {
+        if (peakLinear <= 0.000001f)
+            return "-inf dBFS";
+
+        const auto db = 20.0 * std::log10(static_cast<double>(peakLinear));
+        return juce::String(db, 1) + " dBFS";
+    }
+
     void timerCallback() override
     {
         const auto snapshot = engine.getSnapshot();
+        const auto now = juce::Time::getMillisecondCounterHiRes();
 
         int startedStreams = 0;
-        for (const auto& stream : snapshot.streams)
+        for (std::size_t i = 0; i < snapshot.streams.size(); ++i)
         {
+            const auto& stream = snapshot.streams[i];
             if (stream.writerOpen)
                 ++startedStreams;
+
+            if (stream.producerCallbacks != previousCallbacks[i])
+            {
+                previousCallbacks[i] = stream.producerCallbacks;
+                lastCallbackChangeMs[i] = now;
+            }
         }
 
         juce::String state = "IDLE";
@@ -100,13 +207,18 @@ private:
         status.setText(state, juce::dontSendNotification);
 
         juce::String text;
-        text << "Role       State       Format                  Callbacks   Queue  Drop  Gaps(frames)   Written\n";
-        text << "---------------------------------------------------------------------------------------------\n";
+        text << "Role       State       Format              Peak        Callbacks   Queue  Drop  Gaps(frames)  Written\n";
+        text << "------------------------------------------------------------------------------------------------\n";
 
-        for (const auto& stream : snapshot.streams)
+        for (std::size_t i = 0; i < snapshot.streams.size(); ++i)
         {
+            const auto& stream = snapshot.streams[i];
             const auto role = juce::String(dawstreamer::streamRoleName(stream.role)).paddedRight(' ', 10);
-            const auto connection = juce::String(stream.producerPresent ? "CONNECTED" : "MISSING").paddedRight(' ', 12);
+
+            juce::String connection = "UNCLAIMED";
+            if (stream.producerPresent)
+                connection = (now - lastCallbackChangeMs[i] < 1000.0) ? "ACTIVE" : "CLAIMED";
+            connection = connection.paddedRight(' ', 12);
 
             juce::String format = "N/A";
             if (stream.sourceSampleRate != 0)
@@ -115,17 +227,18 @@ private:
                        + juce::String(stream.sourceChannels) + "ch b"
                        + juce::String(stream.sourceBlockFrames);
             }
-            format = format.paddedRight(' ', 24);
+            format = format.paddedRight(' ', 20);
 
             text << role << connection << format
+                 << peakText(stream.peakLinear).paddedRight(' ', 12)
                  << juce::String(stream.producerCallbacks).paddedRight(' ', 12)
                  << juce::String(stream.pendingBlocks).paddedRight(' ', 7)
                  << juce::String(stream.droppedBlocks).paddedRight(' ', 6)
-                 << (juce::String(stream.gapEvents) + " (" + juce::String(stream.gapFrames) + ")").paddedRight(' ', 15)
+                 << (juce::String(stream.gapEvents) + " (" + juce::String(stream.gapFrames) + ")").paddedRight(' ', 14)
                  << juce::String(stream.framesWritten);
 
             if (stream.duplicateClaims > 0)
-                text << "   duplicate claims=" << stream.duplicateClaims;
+                text << "   dup history=" << stream.duplicateClaims;
 
             text << "\n";
         }
@@ -139,23 +252,36 @@ private:
 
         details.setText(text, juce::dontSendNotification);
 
-        const auto pathText = snapshot.takeDirectory.isEmpty()
-            ? juce::String("Output: Documents\\DAW Streamer Recordings\\<take>\\")
-            : juce::String("Output: ") + snapshot.takeDirectory;
-        filePath.setText(pathText, juce::dontSendNotification);
+        outputPath.setText("Base folder: " + snapshot.outputRoot, juce::dontSendNotification);
+        takePath.setText(snapshot.takeDirectory.isEmpty()
+                             ? juce::String("Current/last take: —")
+                             : juce::String("Current/last take: ") + snapshot.takeDirectory,
+                         juce::dontSendNotification);
 
-        recordButton.setEnabled(!snapshot.sessionActive);
-        stopButton.setEnabled(snapshot.sessionActive);
+        recordStopButton.setButtonText(snapshot.sessionActive ? "Stop" : "Record");
+        recordStopButton.setEnabled(snapshot.lastError.isEmpty() || snapshot.sessionActive);
+        sessionEditor.setEnabled(!snapshot.sessionActive);
+        browseButton.setEnabled(!snapshot.sessionActive);
     }
 
     RecorderEngine engine;
+    std::unique_ptr<juce::PropertiesFile> settings;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
+    std::array<std::uint64_t, dawstreamer::kStreamRoleCount> previousCallbacks {};
+    std::array<double, dawstreamer::kStreamRoleCount> lastCallbackChangeMs {};
+
     juce::Label title;
     juce::Label stage;
-    juce::TextButton recordButton;
-    juce::TextButton stopButton;
+    juce::Label sessionLabel;
+    juce::TextEditor sessionEditor;
+    juce::Label folderLabel;
+    juce::TextButton browseButton;
+    juce::TextButton recordStopButton { "Record" };
     juce::Label status;
     juce::Label details;
-    juce::Label filePath;
+    juce::Label outputPath;
+    juce::Label takePath;
 };
 
 class MainWindow final : public juce::DocumentWindow
@@ -190,7 +316,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.1.0-stage5a1";
+        return "0.1.0-stage5b";
     }
 
     bool moreThanOneInstanceAllowed() override
