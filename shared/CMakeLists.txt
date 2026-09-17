@@ -1,10 +1,12 @@
 if(NOT WIN32)
-    message(FATAL_ERROR "DAW Streamer Stage 4 shared-memory transport currently targets Windows only")
+    message(FATAL_ERROR "DAW Streamer shared-memory transport currently targets Windows only")
 endif()
 
 add_library(DAWStreamerShared STATIC
     Source/SharedAudioTransport.cpp
     Source/SharedAudioTransport.h
+    Source/SharedRecorderControl.cpp
+    Source/SharedRecorderControl.h
 )
 
 target_include_directories(DAWStreamerShared
