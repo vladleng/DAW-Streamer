@@ -1,0 +1,29 @@
+name: Windows build
+
+on:
+  push:
+    branches:
+      - main
+      - stage-2-skeleton
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset windows-x64
+
+      - name: Build Release
+        run: cmake --build --preset windows-x64-release
+
+      - name: Test Release
+        run: ctest --preset windows-x64-release --output-on-failure
