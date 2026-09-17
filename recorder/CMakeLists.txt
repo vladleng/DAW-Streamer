@@ -1,5 +1,6 @@
 juce_add_gui_app(DAWStreamerRecorder
     COMPANY_NAME "Moon River Studio"
+    BUNDLE_ID com.moonriverstudio.dawstreamerrecorder
     PRODUCT_NAME "DAW Streamer Recorder"
 )
 
