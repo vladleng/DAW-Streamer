@@ -17,15 +17,27 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
     };
     addAndMakeVisible(roleBox);
 
-    setSize(560, 600);
+    recordButton.onClick = [this] { processor.requestRecord(); };
+    stopButton.onClick = [this] { processor.requestStop(); };
+    addAndMakeVisible(recordButton);
+    addAndMakeVisible(stopButton);
+
+    setSize(560, 690);
     snapshot = processor.getDiagnosticsSnapshot();
     previousProcessBlockCount = snapshot.processBlockCount;
+    previousRecorderHeartbeat = snapshot.recorderHeartbeat;
+    lastRecorderHeartbeatChangeMs = juce::Time::getMillisecondCounterHiRes();
+    recorderOnline = snapshot.recorderControlOpen
+                  && snapshot.recorderState != dawstreamer::RecorderState::offline
+                  && snapshot.recorderHeartbeat != 0;
     startTimerHz(10);
 }
 
 void DAWStreamerAudioProcessorEditor::resized()
 {
     roleBox.setBounds(230, 58, 250, 28);
+    recordButton.setBounds(230, 100, 120, 34);
+    stopButton.setBounds(360, 100, 120, 34);
 }
 
 void DAWStreamerAudioProcessorEditor::timerCallback()
@@ -38,6 +50,27 @@ void DAWStreamerAudioProcessorEditor::timerCallback()
     if (roleBox.getSelectedId() != expectedId)
         roleBox.setSelectedId(expectedId, juce::dontSendNotification);
 
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    if (snapshot.recorderHeartbeat != previousRecorderHeartbeat)
+    {
+        previousRecorderHeartbeat = snapshot.recorderHeartbeat;
+        lastRecorderHeartbeatChangeMs = now;
+        recorderOnline = snapshot.recorderControlOpen
+                      && snapshot.recorderState != dawstreamer::RecorderState::offline;
+    }
+    else if (now - lastRecorderHeartbeatChangeMs > 1000.0)
+    {
+        recorderOnline = false;
+    }
+
+    const auto canRecord = recorderOnline
+                        && snapshot.recorderState == dawstreamer::RecorderState::idle;
+    const auto canStop = recorderOnline
+                      && (snapshot.recorderState == dawstreamer::RecorderState::waitingForStreams
+                          || snapshot.recorderState == dawstreamer::RecorderState::recording);
+
+    recordButton.setEnabled(canRecord);
+    stopButton.setEnabled(canStop);
     repaint();
 }
 
@@ -57,14 +90,15 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer — Stage 4 Sender", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer — Stage 5A", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
     graphics.setColour(juce::Colour(0xffaeb4bc));
     graphics.drawText("Stream role", 24, 58, 190, 28, juce::Justification::centredLeft);
+    graphics.drawText("Recorder control", 24, 103, 190, 28, juce::Justification::centredLeft);
 
-    auto y = 100;
+    auto y = 150;
     constexpr int lineHeight = 25;
 
     const auto drawLine = [&graphics, &y](const juce::String& name, const juce::String& value)
@@ -76,6 +110,12 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
         y += lineHeight;
     };
 
+    const auto recorderState = recorderOnline
+        ? juce::String(dawstreamer::recorderStateName(snapshot.recorderState))
+        : juce::String("OFFLINE");
+
+    drawLine("Recorder", recorderState);
+    drawLine("Take frames", recorderOnline ? juce::String(snapshot.recorderTakeFrames) : "N/A");
     drawLine("Role status", snapshot.roleClaimed ? "CLAIMED" : "DUPLICATE / NOT CLAIMED");
     drawLine("processBlock", callbacksActive ? "RUNNING" : "NO CALLBACKS");
     drawLine("Callback count", juce::String(snapshot.processBlockCount));
@@ -102,6 +142,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("Assign a unique role to every sender. Keep all senders enabled while recording.",
+    graphics.drawText("Record/Stop controls the single Recorder session. DAW transport remains independent.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }
