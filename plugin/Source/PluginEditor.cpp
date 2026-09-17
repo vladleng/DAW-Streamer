@@ -4,10 +4,28 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
     : AudioProcessorEditor(processorToUse),
       processor(processorToUse)
 {
-    setSize(560, 520);
+    roleBox.addItem("Vocal", 1);
+    roleBox.addItem("Guitar", 2);
+    roleBox.addItem("Keys", 3);
+    roleBox.addItem("Playback", 4);
+    roleBox.setSelectedId(static_cast<int>(processor.getStreamRole()) + 1, juce::dontSendNotification);
+    roleBox.onChange = [this]
+    {
+        const auto index = roleBox.getSelectedId() - 1;
+        if (index >= 0 && index < static_cast<int>(dawstreamer::kStreamRoleCount))
+            processor.setStreamRole(static_cast<dawstreamer::StreamRole>(index));
+    };
+    addAndMakeVisible(roleBox);
+
+    setSize(560, 600);
     snapshot = processor.getDiagnosticsSnapshot();
     previousProcessBlockCount = snapshot.processBlockCount;
     startTimerHz(10);
+}
+
+void DAWStreamerAudioProcessorEditor::resized()
+{
+    roleBox.setBounds(230, 58, 250, 28);
 }
 
 void DAWStreamerAudioProcessorEditor::timerCallback()
@@ -15,6 +33,11 @@ void DAWStreamerAudioProcessorEditor::timerCallback()
     snapshot = processor.getDiagnosticsSnapshot();
     callbacksActive = snapshot.processBlockCount != previousProcessBlockCount;
     previousProcessBlockCount = snapshot.processBlockCount;
+
+    const auto expectedId = static_cast<int>(snapshot.streamRole) + 1;
+    if (roleBox.getSelectedId() != expectedId)
+        roleBox.setSelectedId(expectedId, juce::dontSendNotification);
+
     repaint();
 }
 
@@ -34,12 +57,14 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer — Stage 3 Transport", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer — Stage 4 Sender", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
+    graphics.setColour(juce::Colour(0xffaeb4bc));
+    graphics.drawText("Stream role", 24, 58, 190, 28, juce::Justification::centredLeft);
 
-    auto y = 62;
+    auto y = 100;
     constexpr int lineHeight = 25;
 
     const auto drawLine = [&graphics, &y](const juce::String& name, const juce::String& value)
@@ -51,13 +76,14 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
         y += lineHeight;
     };
 
-    const auto callbackText = callbacksActive ? "RUNNING" : "NO CALLBACKS";
-    drawLine("processBlock", callbackText);
+    drawLine("Role status", snapshot.roleClaimed ? "CLAIMED" : "DUPLICATE / NOT CLAIMED");
+    drawLine("processBlock", callbacksActive ? "RUNNING" : "NO CALLBACKS");
     drawLine("Callback count", juce::String(snapshot.processBlockCount));
     drawLine("Shared transport", yesNo(snapshot.transportOpen));
     drawLine("Queued blocks", juce::String(snapshot.transportPendingBlocks));
     drawLine("Dropped blocks", juce::String(snapshot.transportDroppedBlocks));
     drawLine("Oversized blocks", juce::String(snapshot.transportOversizedBlocks));
+    drawLine("Duplicate claims", juce::String(snapshot.duplicateRoleClaims));
     drawLine("Host is playing", snapshot.positionAvailable ? yesNo(snapshot.isPlaying) : "N/A");
     drawLine("AudioPlayHead", yesNo(snapshot.playHeadAvailable));
     drawLine("PositionInfo", yesNo(snapshot.positionAvailable));
@@ -76,6 +102,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("Stage 3 uses one sender instance only. Keep the plugin enabled while recording.",
+    graphics.drawText("Assign a unique role to every sender. Keep all senders enabled while recording.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }

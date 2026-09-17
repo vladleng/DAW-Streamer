@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -36,14 +38,17 @@ public:
         int inputChannels = 0;
         int outputChannels = 0;
 
+        dawstreamer::StreamRole streamRole = dawstreamer::StreamRole::Vocal;
         bool transportOpen = false;
+        bool roleClaimed = false;
         std::uint64_t transportPendingBlocks = 0;
         std::uint64_t transportDroppedBlocks = 0;
         std::uint64_t transportOversizedBlocks = 0;
+        std::uint64_t duplicateRoleClaims = 0;
     };
 
     DAWStreamerAudioProcessor();
-    ~DAWStreamerAudioProcessor() override = default;
+    ~DAWStreamerAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -69,10 +74,17 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    void setStreamRole(dawstreamer::StreamRole role) noexcept;
+    dawstreamer::StreamRole getStreamRole() const noexcept;
     DiagnosticsSnapshot getDiagnosticsSnapshot() const noexcept;
 
 private:
-    dawstreamer::SharedAudioTransport audioTransport;
+    dawstreamer::SharedAudioTransport* transportForRole(dawstreamer::StreamRole role) const noexcept;
+
+    std::array<std::unique_ptr<dawstreamer::SharedAudioTransport>, dawstreamer::kStreamRoleCount> audioTransports;
+    std::atomic<int> currentRole { -1 };
+    std::uint64_t ownerToken = 0;
+    std::uint64_t producerFrameCounter = 0;
 
     std::atomic<std::uint64_t> processBlockCount { 0 };
     std::atomic<bool> playHeadAvailable { false };

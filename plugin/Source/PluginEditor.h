@@ -14,6 +14,7 @@ public:
     ~DAWStreamerAudioProcessorEditor() override = default;
 
     void paint(juce::Graphics& graphics) override;
+    void resized() override;
 
 private:
     void timerCallback() override;
@@ -24,6 +25,7 @@ private:
     DAWStreamerAudioProcessor::DiagnosticsSnapshot snapshot;
     std::uint64_t previousProcessBlockCount = 0;
     bool callbacksActive = false;
+    juce::ComboBox roleBox;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DAWStreamerAudioProcessorEditor)
 };
