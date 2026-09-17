@@ -1,5 +1,5 @@
 if(NOT WIN32)
-    message(FATAL_ERROR "DAW Streamer Stage 3 shared-memory transport currently targets Windows only")
+    message(FATAL_ERROR "DAW Streamer Stage 4 shared-memory transport currently targets Windows only")
 endif()
 
 add_library(DAWStreamerShared STATIC

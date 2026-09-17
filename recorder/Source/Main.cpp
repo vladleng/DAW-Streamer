@@ -15,7 +15,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Stage 3 — one shared-memory audio stream to 24-bit WAV",
+        stage.setText("Stage 4 — Vocal / Guitar / Keys / Playback to four synchronized WAV files",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -33,14 +33,14 @@ public:
         addAndMakeVisible(status);
 
         details.setJustificationType(juce::Justification::topLeft);
-        details.setFont(juce::FontOptions(14.0f));
+        details.setFont(juce::FontOptions(13.0f));
         addAndMakeVisible(details);
 
         filePath.setJustificationType(juce::Justification::topLeft);
         filePath.setFont(juce::FontOptions(13.0f));
         addAndMakeVisible(filePath);
 
-        setSize(680, 470);
+        setSize(960, 540);
         startTimerHz(5);
         timerCallback();
     }
@@ -64,8 +64,8 @@ public:
         area.removeFromTop(12);
         status.setBounds(area.removeFromTop(34));
         area.removeFromTop(8);
-        details.setBounds(area.removeFromTop(190));
-        area.removeFromTop(6);
+        details.setBounds(area.removeFromTop(250));
+        area.removeFromTop(8);
         filePath.setBounds(area);
     }
 
@@ -77,46 +77,60 @@ private:
         juce::String state = "IDLE";
         if (!snapshot.lastError.isEmpty())
             state = "ERROR";
-        else if (snapshot.sessionActive && snapshot.writerOpen)
-            state = "RECORDING";
+        else if (snapshot.sessionActive && snapshot.waitingForStreams)
+            state = "WAITING FOR 4 STREAMS";
         else if (snapshot.sessionActive)
-            state = "WAITING FOR AUDIO";
+            state = "RECORDING";
 
         status.setText(state, juce::dontSendNotification);
 
-        const auto sourceFormat = snapshot.sourceSampleRate == 0
-            ? juce::String("N/A")
-            : juce::String(snapshot.sourceSampleRate) + " Hz, "
-                + juce::String(snapshot.sourceChannels) + " ch, block "
-                + juce::String(snapshot.sourceBlockFrames);
-
-        double durationSeconds = 0.0;
-        if (snapshot.fileSampleRate != 0)
-            durationSeconds = static_cast<double>(snapshot.framesWritten)
-                            / static_cast<double>(snapshot.fileSampleRate);
-
         juce::String text;
-        text << "Shared transport: " << (snapshot.transportOpen ? "OPEN" : "CLOSED") << "\n"
-             << "Producer callbacks: " << snapshot.producerCallbacks << "\n"
-             << "Source format: " << sourceFormat << "\n"
-             << "Queued blocks: " << snapshot.pendingBlocks << "\n"
-             << "Dropped blocks: " << snapshot.droppedBlocks << "\n"
-             << "Oversized blocks: " << snapshot.oversizedBlocks << "\n"
-             << "Frames written: " << snapshot.framesWritten
-             << "  (" << juce::String(durationSeconds, 2) << " s)";
+        text << "Role       State       Format                  Callbacks   Queue  Drop  Gaps(frames)   Written\n";
+        text << "---------------------------------------------------------------------------------------------\n";
+
+        for (const auto& stream : snapshot.streams)
+        {
+            const auto role = juce::String(dawstreamer::streamRoleName(stream.role)).paddedRight(' ', 10);
+            const auto connection = juce::String(stream.producerPresent ? "CONNECTED" : "MISSING").paddedRight(' ', 12);
+
+            juce::String format = "N/A";
+            if (stream.sourceSampleRate != 0)
+            {
+                format = juce::String(stream.sourceSampleRate) + " Hz "
+                       + juce::String(stream.sourceChannels) + "ch b"
+                       + juce::String(stream.sourceBlockFrames);
+            }
+            format = format.paddedRight(' ', 24);
+
+            text << role << connection << format
+                 << juce::String(stream.producerCallbacks).paddedRight(' ', 12)
+                 << juce::String(stream.pendingBlocks).paddedRight(' ', 7)
+                 << juce::String(stream.droppedBlocks).paddedRight(' ', 6)
+                 << (juce::String(stream.gapEvents) + " (" + juce::String(stream.gapFrames) + ")").paddedRight(' ', 15)
+                 << juce::String(stream.framesWritten);
+
+            if (stream.duplicateClaims > 0)
+                text << "   duplicate claims=" << stream.duplicateClaims;
+
+            text << "\n";
+        }
+
+        const auto seconds = static_cast<double>(snapshot.takeFrames) / 48000.0;
+        text << "\nTake timeline: " << snapshot.takeFrames << " frames ("
+             << juce::String(seconds, 2) << " s)";
 
         if (!snapshot.lastError.isEmpty())
             text << "\nError: " << snapshot.lastError;
 
         details.setText(text, juce::dontSendNotification);
 
-        const auto pathText = snapshot.lastFilePath.isEmpty()
-            ? juce::String("Output: Documents\\DAW Streamer Recordings\\ (file is created after the first audio block)")
-            : juce::String("Output: ") + snapshot.lastFilePath;
+        const auto pathText = snapshot.takeDirectory.isEmpty()
+            ? juce::String("Output: Documents\\DAW Streamer Recordings\\<take>\\")
+            : juce::String("Output: ") + snapshot.takeDirectory;
         filePath.setText(pathText, juce::dontSendNotification);
 
         recordButton.setEnabled(!snapshot.sessionActive);
-        stopButton.setEnabled(snapshot.sessionActive || snapshot.writerOpen);
+        stopButton.setEnabled(snapshot.sessionActive);
     }
 
     RecorderEngine engine;
@@ -161,7 +175,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.1.0-stage3";
+        return "0.1.0-stage4";
     }
 
     bool moreThanOneInstanceAllowed() override
