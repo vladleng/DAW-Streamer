@@ -4,7 +4,6 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <optional>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -44,7 +43,7 @@ public:
         juce::String lastError;
     };
 
-    RecorderEngine();
+    explicit RecorderEngine(juce::File outputRootOverride = {});
     ~RecorderEngine() override;
 
     void startRecording() noexcept;
@@ -64,12 +63,14 @@ private:
         dawstreamer::StreamRole role = dawstreamer::StreamRole::Vocal;
         std::unique_ptr<dawstreamer::SharedAudioTransport> transport;
         std::unique_ptr<juce::AudioFormatWriter> writer;
-        std::optional<dawstreamer::AudioBlock> firstBlock;
         std::uint64_t producerAnchorFrame = 0;
         std::uint64_t takeBaseOffset = 0;
         std::uint64_t framesWritten = 0;
         std::uint64_t gapFrames = 0;
         std::uint64_t gapEvents = 0;
+        std::uint64_t droppedBaseline = 0;
+        std::uint64_t oversizedBaseline = 0;
+        bool counterBaselineValid = false;
         std::uint32_t fileChannels = 0;
     };
 
@@ -79,7 +80,8 @@ private:
     dawstreamer::RecorderState currentSharedState() const noexcept;
     void beginTake();
     void finishTake();
-    bool tryStartTakeFromFirstBlocks();
+    bool startStreamFromFirstBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
+    bool allStreamsStarted() const noexcept;
     bool openWriter(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
     void handleAudioBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& block);
     bool writeSilence(StreamState& stream, std::uint64_t frames);
@@ -95,7 +97,11 @@ private:
     std::uint64_t lastSharedCommandWord = 0;
     bool sessionActiveInternal = false;
     bool waitingForStreamsInternal = false;
+    bool takeOriginEstablished = false;
+    bool takeHostOriginValid = false;
+    std::int64_t takeHostOriginSamples = 0;
     std::uint64_t globalTakeFrontier = 0;
+    juce::File outputRootOverride;
     juce::File takeDirectory;
     juce::String lastError;
 
