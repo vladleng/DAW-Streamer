@@ -15,7 +15,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Stage 5A — four synchronized WAV files + plugin Record/Stop control",
+        stage.setText("Stage 5A1 — immediate stream recording + late-stream alignment",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -74,13 +74,28 @@ private:
     {
         const auto snapshot = engine.getSnapshot();
 
+        int startedStreams = 0;
+        for (const auto& stream : snapshot.streams)
+        {
+            if (stream.writerOpen)
+                ++startedStreams;
+        }
+
         juce::String state = "IDLE";
         if (!snapshot.lastError.isEmpty())
+        {
             state = "ERROR";
+        }
         else if (snapshot.sessionActive && snapshot.waitingForStreams)
-            state = "WAITING FOR 4 STREAMS";
+        {
+            state = "RECORDING · " + juce::String(startedStreams)
+                  + "/" + juce::String(static_cast<int>(dawstreamer::kStreamRoleCount))
+                  + " STREAMS";
+        }
         else if (snapshot.sessionActive)
+        {
             state = "RECORDING";
+        }
 
         status.setText(state, juce::dontSendNotification);
 
@@ -175,7 +190,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.1.0-stage5a";
+        return "0.1.0-stage5a1";
     }
 
     bool moreThanOneInstanceAllowed() override
