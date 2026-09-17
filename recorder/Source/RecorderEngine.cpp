@@ -19,6 +19,7 @@ RecorderEngine::RecorderEngine()
         stream.transport = std::make_unique<dawstreamer::SharedAudioTransport>(stream.role);
     }
 
+    lastSharedCommandWord = recorderControl.snapshot().commandWord;
     publishSnapshot();
     startThread();
 }
@@ -28,6 +29,7 @@ RecorderEngine::~RecorderEngine()
     signalThreadShouldExit();
     waitForThreadToExit(5000);
     closeWriters(false);
+    recorderControl.publishOffline();
 }
 
 void RecorderEngine::startRecording() noexcept
@@ -56,10 +58,10 @@ void RecorderEngine::run()
         if (command != Command::none)
             handleCommand(command);
 
+        handleSharedControlCommand();
+
         bool consumedAny = false;
 
-        // One block per stream per pass keeps the four queues approximately at the
-        // same cycle and makes the common frontier useful for reconnect padding.
         for (std::size_t i = 0; i < streams.size(); ++i)
         {
             auto& stream = streams[i];
@@ -103,12 +105,45 @@ void RecorderEngine::handleCommand(Command command)
 {
     if (command == Command::start)
     {
-        beginTake();
+        if (!sessionActiveInternal)
+            beginTake();
         return;
     }
 
-    if (command == Command::stop)
+    if (command == Command::stop && sessionActiveInternal)
         finishTake();
+}
+
+void RecorderEngine::handleSharedControlCommand()
+{
+    std::uint64_t currentWord = lastSharedCommandWord;
+    dawstreamer::RecorderCommand command = dawstreamer::RecorderCommand::none;
+
+    if (!recorderControl.readCommandAfter(lastSharedCommandWord, currentWord, command))
+        return;
+
+    lastSharedCommandWord = currentWord;
+
+    if (command == dawstreamer::RecorderCommand::record)
+    {
+        if (!sessionActiveInternal)
+            beginTake();
+        return;
+    }
+
+    if (command == dawstreamer::RecorderCommand::stop && sessionActiveInternal)
+        finishTake();
+}
+
+dawstreamer::RecorderState RecorderEngine::currentSharedState() const noexcept
+{
+    if (!lastError.isEmpty())
+        return dawstreamer::RecorderState::error;
+    if (sessionActiveInternal && waitingForStreamsInternal)
+        return dawstreamer::RecorderState::waitingForStreams;
+    if (sessionActiveInternal)
+        return dawstreamer::RecorderState::recording;
+    return dawstreamer::RecorderState::idle;
 }
 
 void RecorderEngine::beginTake()
@@ -191,13 +226,13 @@ bool RecorderEngine::tryStartTakeFromFirstBlocks()
 
         if (block.sampleRate != kRequiredSampleRate)
         {
-            failTake("Stage 4 requires all four sources at 48 kHz. Resampling is disabled.");
+            failTake("Stage 5A requires all four sources at 48 kHz. Resampling is disabled.");
             return false;
         }
 
         if (block.numChannels == 0 || block.numChannels > dawstreamer::kMaxChannels)
         {
-            failTake("Unsupported channel count on one of the Stage 4 streams.");
+            failTake("Unsupported channel count on one of the streams.");
             return false;
         }
 
@@ -279,7 +314,7 @@ void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer
 
     if (block.sampleRate != kRequiredSampleRate || block.numChannels != stream.fileChannels)
     {
-        failTake("Source format changed during the Stage 4 take: "
+        failTake("Source format changed during the take: "
                  + juce::String(dawstreamer::streamRoleName(stream.role)) + ".");
         return;
     }
@@ -290,9 +325,6 @@ void RecorderEngine::handleAudioBlock(std::size_t streamIndex, const dawstreamer
     const auto producerRelative = block.producerFrameStart - stream.producerAnchorFrame;
     auto desiredStart = stream.takeBaseOffset + producerRelative;
 
-    // When a sender is bypassed its processBlock stops, so its local producer counter
-    // also stops. Other streams keep advancing. On reconnect, the common frontier
-    // restores the missing wall-time as silence instead of compressing the take.
     const auto syncFloor = globalTakeFrontier > block.numFrames
         ? globalTakeFrontier - block.numFrames
         : std::uint64_t { 0 };
@@ -435,6 +467,8 @@ void RecorderEngine::publishSnapshot()
             out.sourceBlockFrames = state.transport->lastNumFrames();
         }
     }
+
+    recorderControl.publishState(currentSharedState(), globalTakeFrontier);
 
     const juce::ScopedLock lock(snapshotLock);
     publishedSnapshot = std::move(result);

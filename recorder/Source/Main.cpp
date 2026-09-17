@@ -15,7 +15,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Stage 4 — Vocal / Guitar / Keys / Playback to four synchronized WAV files",
+        stage.setText("Stage 5A — four synchronized WAV files + plugin Record/Stop control",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -175,7 +175,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.1.0-stage4";
+        return "0.1.0-stage5a";
     }
 
     bool moreThanOneInstanceAllowed() override

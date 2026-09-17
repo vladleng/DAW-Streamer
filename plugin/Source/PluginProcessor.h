@@ -8,6 +8,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "SharedAudioTransport.h"
+#include "SharedRecorderControl.h"
 
 class DAWStreamerAudioProcessor final : public juce::AudioProcessor
 {
@@ -45,6 +46,11 @@ public:
         std::uint64_t transportDroppedBlocks = 0;
         std::uint64_t transportOversizedBlocks = 0;
         std::uint64_t duplicateRoleClaims = 0;
+
+        bool recorderControlOpen = false;
+        dawstreamer::RecorderState recorderState = dawstreamer::RecorderState::offline;
+        std::uint64_t recorderHeartbeat = 0;
+        std::uint64_t recorderTakeFrames = 0;
     };
 
     DAWStreamerAudioProcessor();
@@ -76,12 +82,15 @@ public:
 
     void setStreamRole(dawstreamer::StreamRole role) noexcept;
     dawstreamer::StreamRole getStreamRole() const noexcept;
+    void requestRecord() noexcept;
+    void requestStop() noexcept;
     DiagnosticsSnapshot getDiagnosticsSnapshot() const noexcept;
 
 private:
     dawstreamer::SharedAudioTransport* transportForRole(dawstreamer::StreamRole role) const noexcept;
 
     std::array<std::unique_ptr<dawstreamer::SharedAudioTransport>, dawstreamer::kStreamRoleCount> audioTransports;
+    dawstreamer::SharedRecorderControl recorderControl;
     std::atomic<int> currentRole { -1 };
     std::uint64_t ownerToken = 0;
     std::uint64_t producerFrameCounter = 0;

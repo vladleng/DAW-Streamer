@@ -24,8 +24,14 @@ private:
     DAWStreamerAudioProcessor& processor;
     DAWStreamerAudioProcessor::DiagnosticsSnapshot snapshot;
     std::uint64_t previousProcessBlockCount = 0;
+    std::uint64_t previousRecorderHeartbeat = 0;
+    double lastRecorderHeartbeatChangeMs = 0.0;
     bool callbacksActive = false;
+    bool recorderOnline = false;
+
     juce::ComboBox roleBox;
+    juce::TextButton recordButton { "Record" };
+    juce::TextButton stopButton { "Stop" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DAWStreamerAudioProcessorEditor)
 };

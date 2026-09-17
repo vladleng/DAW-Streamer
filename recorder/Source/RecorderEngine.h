@@ -10,6 +10,7 @@
 #include <juce_core/juce_core.h>
 
 #include "SharedAudioTransport.h"
+#include "SharedRecorderControl.h"
 
 class RecorderEngine final : private juce::Thread
 {
@@ -74,6 +75,8 @@ private:
 
     void run() override;
     void handleCommand(Command command);
+    void handleSharedControlCommand();
+    dawstreamer::RecorderState currentSharedState() const noexcept;
     void beginTake();
     void finishTake();
     bool tryStartTakeFromFirstBlocks();
@@ -86,8 +89,10 @@ private:
 
     std::array<StreamState, dawstreamer::kStreamRoleCount> streams;
     std::array<float, dawstreamer::kMaxFramesPerBlock> silenceBuffer {};
+    dawstreamer::SharedRecorderControl recorderControl;
 
     std::atomic<int> pendingCommand { static_cast<int>(Command::none) };
+    std::uint64_t lastSharedCommandWord = 0;
     bool sessionActiveInternal = false;
     bool waitingForStreamsInternal = false;
     std::uint64_t globalTakeFrontier = 0;
