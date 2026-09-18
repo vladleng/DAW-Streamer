@@ -34,7 +34,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Stage 5B — recording folder, session takes and live diagnostics",
+        stage.setText("Version 0.1.0 RC1 - release candidate",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -195,7 +195,7 @@ private:
         }
         else if (snapshot.sessionActive && snapshot.waitingForStreams)
         {
-            state = "RECORDING · " + juce::String(startedStreams)
+            state = "RECORDING - " + juce::String(startedStreams)
                   + "/" + juce::String(static_cast<int>(dawstreamer::kStreamRoleCount))
                   + " STREAMS";
         }
@@ -254,7 +254,7 @@ private:
 
         outputPath.setText("Base folder: " + snapshot.outputRoot, juce::dontSendNotification);
         takePath.setText(snapshot.takeDirectory.isEmpty()
-                             ? juce::String("Current/last take: —")
+                             ? juce::String("Current/last take: -")
                              : juce::String("Current/last take: ") + snapshot.takeDirectory,
                          juce::dontSendNotification);
 
@@ -316,7 +316,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.1.0-stage5b";
+        return "0.1.0-rc1";
     }
 
     bool moreThanOneInstanceAllowed() override
