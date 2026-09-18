@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - stage-8a-recording-time
+      - stage-8b-performance-mode
   pull_request:
     branches:
       - main
@@ -28,10 +28,10 @@ jobs:
       - name: Test Release
         run: ctest --preset windows-x64-release --output-on-failure
 
-      - name: Upload Stage 8A binaries
+      - name: Upload Stage 8B binaries
         uses: actions/upload-artifact@v4
         with:
-          name: DAW-Streamer-v0.2.0-stage8a-windows-x64
+          name: DAW-Streamer-v0.2.0-stage8b-windows-x64
           if-no-files-found: error
           path: |
             build/windows-x64/**/Release/VST3/DAW Streamer.vst3/**
