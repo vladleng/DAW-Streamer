@@ -5,6 +5,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include "RecorderEngine.h"
+#include "RecordingTime.h"
 
 namespace
 {
@@ -34,7 +35,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Version 0.1.0 RC1 - release candidate",
+        stage.setText("Version 0.2.0 - Stage 8A recording time",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -71,6 +72,10 @@ public:
         status.setJustificationType(juce::Justification::centred);
         status.setFont(juce::FontOptions(18.0f, juce::Font::bold));
         addAndMakeVisible(status);
+
+        recordingTime.setJustificationType(juce::Justification::centred);
+        recordingTime.setFont(juce::FontOptions(22.0f, juce::Font::bold));
+        addAndMakeVisible(recordingTime);
 
         details.setJustificationType(juce::Justification::topLeft);
         details.setFont(juce::FontOptions(13.0f));
@@ -121,8 +126,9 @@ public:
 
         area.removeFromTop(8);
         status.setBounds(area.removeFromTop(34));
+        recordingTime.setBounds(area.removeFromTop(34));
         area.removeFromTop(8);
-        details.setBounds(area.removeFromTop(300));
+        details.setBounds(area.removeFromTop(266));
         area.removeFromTop(8);
         outputPath.setBounds(area.removeFromTop(24));
         takePath.setBounds(area.removeFromTop(24));
@@ -205,6 +211,9 @@ private:
         }
 
         status.setText(state, juce::dontSendNotification);
+        recordingTime.setText("Recording time: "
+                                  + juce::String(dawstreamer::formatRecordingTime(snapshot.takeFrames)),
+                              juce::dontSendNotification);
 
         juce::String text;
         text << "Role       State       Format              Peak        Callbacks   Queue  Drop  Gaps(frames)  Written\n";
@@ -243,10 +252,6 @@ private:
             text << "\n";
         }
 
-        const auto seconds = static_cast<double>(snapshot.takeFrames) / 48000.0;
-        text << "\nTake timeline: " << snapshot.takeFrames << " frames ("
-             << juce::String(seconds, 2) << " s)";
-
         if (!snapshot.lastError.isEmpty())
             text << "\nError: " << snapshot.lastError;
 
@@ -279,6 +284,7 @@ private:
     juce::TextButton browseButton;
     juce::TextButton recordStopButton { "Record" };
     juce::Label status;
+    juce::Label recordingTime;
     juce::Label details;
     juce::Label outputPath;
     juce::Label takePath;
@@ -316,7 +322,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.1.0-rc1";
+        return "0.2.0-stage8a";
     }
 
     bool moreThanOneInstanceAllowed() override

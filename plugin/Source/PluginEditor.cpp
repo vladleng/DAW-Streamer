@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "RecordingTime.h"
 
 DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudioProcessor& processorToUse)
     : AudioProcessorEditor(processorToUse),
@@ -101,7 +102,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer v0.1.0 RC1", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer v0.2.0 Stage 8A", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
@@ -126,7 +127,10 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
         : juce::String("OFFLINE");
 
     drawLine("Recorder", recorderState);
-    drawLine("Take frames", recorderOnline ? juce::String(snapshot.recorderTakeFrames) : "N/A");
+    drawLine("Recording time",
+             recorderOnline
+                 ? juce::String(dawstreamer::formatRecordingTime(snapshot.recorderTakeFrames))
+                 : juce::String("N/A"));
     drawLine("Role status", snapshot.roleClaimed ? "CLAIMED" : "DUPLICATE / NOT CLAIMED");
     drawLine("processBlock", callbacksActive ? "RUNNING" : "NO CALLBACKS");
     drawLine("Callback count", juce::String(snapshot.processBlockCount));

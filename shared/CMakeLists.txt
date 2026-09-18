@@ -3,6 +3,7 @@ if(NOT WIN32)
 endif()
 
 add_library(DAWStreamerShared STATIC
+    Source/RecordingTime.h
     Source/SharedAudioTransport.cpp
     Source/SharedAudioTransport.h
     Source/SharedRecorderControl.cpp
