@@ -101,7 +101,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer — Stage 5B", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer v0.1.0 RC1", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
