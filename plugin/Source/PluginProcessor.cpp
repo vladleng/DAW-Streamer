@@ -1,12 +1,28 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+namespace
+{
+bool recorderStateIsRecording(dawstreamer::RecorderState state) noexcept
+{
+    return state == dawstreamer::RecorderState::waitingForStreams
+        || state == dawstreamer::RecorderState::recording;
+}
+}
+
 DAWStreamerAudioProcessor::DAWStreamerAudioProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
     ownerToken = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(this));
+
+    recordingParameter = new juce::AudioParameterBool(
+        juce::ParameterID { "recording", 1 },
+        "Recording",
+        false);
+    addParameter(recordingParameter);
+    recordingParameter->addListener(this);
 
     for (std::size_t i = 0; i < dawstreamer::kStreamRoleCount; ++i)
     {
@@ -15,10 +31,20 @@ DAWStreamerAudioProcessor::DAWStreamerAudioProcessor()
     }
 
     setStreamRole(dawstreamer::StreamRole::Vocal);
+
+    const auto control = recorderControl.snapshot();
+    previousRecorderHeartbeat = control.heartbeat;
+    lastRecorderHeartbeatChangeMs = juce::Time::getMillisecondCounterHiRes();
+    startTimerHz(10);
 }
 
 DAWStreamerAudioProcessor::~DAWStreamerAudioProcessor()
 {
+    stopTimer();
+
+    if (recordingParameter != nullptr)
+        recordingParameter->removeListener(this);
+
     for (auto& transport : audioTransports)
     {
         if (transport != nullptr)
@@ -196,6 +222,94 @@ void DAWStreamerAudioProcessor::requestStop() noexcept
     recorderControl.sendCommand(dawstreamer::RecorderCommand::stop);
 }
 
+void DAWStreamerAudioProcessor::parameterValueChanged(int parameterIndex, float newValue)
+{
+    if (recordingParameter == nullptr
+        || parameterIndex != recordingParameter->getParameterIndex()
+        || suppressRecordingParameterCommand.load(std::memory_order_acquire))
+        return;
+
+    if (!recorderOnlineForControl.load(std::memory_order_acquire))
+        return;
+
+    const auto desiredRecording = newValue >= 0.5f;
+    pendingDesiredRecording.store(desiredRecording, std::memory_order_release);
+    pendingRecordingCommand.store(true, std::memory_order_release);
+
+    if (desiredRecording)
+        requestRecord();
+    else
+        requestStop();
+}
+
+void DAWStreamerAudioProcessor::parameterGestureChanged(int, bool)
+{
+}
+
+void DAWStreamerAudioProcessor::timerCallback()
+{
+    const auto control = recorderControl.snapshot();
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+
+    if (control.heartbeat != previousRecorderHeartbeat)
+    {
+        previousRecorderHeartbeat = control.heartbeat;
+        lastRecorderHeartbeatChangeMs = now;
+    }
+
+    const auto recorderOnline = control.open
+                             && control.heartbeat != 0
+                             && control.state != dawstreamer::RecorderState::offline
+                             && (now - lastRecorderHeartbeatChangeMs) <= 1000.0;
+
+    recorderOnlineForControl.store(recorderOnline, std::memory_order_release);
+
+    if (!recorderOnline)
+    {
+        pendingRecordingCommand.store(false, std::memory_order_release);
+        syncRecordingParameterFromRecorder(false);
+        return;
+    }
+
+    const auto actualRecording = recorderStateIsRecording(control.state);
+
+    if (control.state == dawstreamer::RecorderState::error)
+    {
+        pendingRecordingCommand.store(false, std::memory_order_release);
+        syncRecordingParameterFromRecorder(false);
+        return;
+    }
+
+    if (pendingRecordingCommand.load(std::memory_order_acquire))
+    {
+        const auto desiredRecording = pendingDesiredRecording.load(std::memory_order_acquire);
+        const auto acknowledged = desiredRecording
+            ? actualRecording
+            : control.state == dawstreamer::RecorderState::idle;
+
+        if (!acknowledged)
+            return;
+
+        pendingRecordingCommand.store(false, std::memory_order_release);
+    }
+
+    syncRecordingParameterFromRecorder(actualRecording);
+}
+
+void DAWStreamerAudioProcessor::syncRecordingParameterFromRecorder(bool recording)
+{
+    if (recordingParameter == nullptr)
+        return;
+
+    const auto target = recording ? 1.0f : 0.0f;
+    if ((recordingParameter->getValue() >= 0.5f) == recording)
+        return;
+
+    suppressRecordingParameterCommand.store(true, std::memory_order_release);
+    recordingParameter->setValueNotifyingHost(target);
+    suppressRecordingParameterCommand.store(false, std::memory_order_release);
+}
+
 dawstreamer::SharedAudioTransport* DAWStreamerAudioProcessor::transportForRole(
     dawstreamer::StreamRole role) const noexcept
 {
@@ -243,6 +357,11 @@ DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDia
     result.recorderState = control.state;
     result.recorderHeartbeat = control.heartbeat;
     result.recorderTakeFrames = control.takeFrames;
+
+    if (recordingParameter != nullptr)
+        result.recordingParameterOn = recordingParameter->getValue() >= 0.5f;
+    result.recordingControlOnline = recorderOnlineForControl.load(std::memory_order_acquire);
+    result.recordingControlPending = pendingRecordingCommand.load(std::memory_order_acquire);
 
     return result;
 }
