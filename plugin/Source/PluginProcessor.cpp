@@ -302,7 +302,7 @@ void DAWStreamerAudioProcessor::syncRecordingParameterFromRecorder(bool recordin
         return;
 
     const auto target = recording ? 1.0f : 0.0f;
-    if ((recordingParameter->getValue() >= 0.5f) == recording)
+    if (recordingParameter->get() == recording)
         return;
 
     suppressRecordingParameterCommand.store(true, std::memory_order_release);
@@ -359,7 +359,7 @@ DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDia
     result.recorderTakeFrames = control.takeFrames;
 
     if (recordingParameter != nullptr)
-        result.recordingParameterOn = recordingParameter->getValue() >= 0.5f;
+        result.recordingParameterOn = recordingParameter->get();
     result.recordingControlOnline = recorderOnlineForControl.load(std::memory_order_acquire);
     result.recordingControlPending = pendingRecordingCommand.load(std::memory_order_acquire);
 
