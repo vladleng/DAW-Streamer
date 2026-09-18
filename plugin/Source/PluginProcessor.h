@@ -10,7 +10,9 @@
 #include "SharedAudioTransport.h"
 #include "SharedRecorderControl.h"
 
-class DAWStreamerAudioProcessor final : public juce::AudioProcessor
+class DAWStreamerAudioProcessor final : public juce::AudioProcessor,
+                                        private juce::AudioProcessorParameter::Listener,
+                                        private juce::Timer
 {
 public:
     struct DiagnosticsSnapshot
@@ -51,6 +53,10 @@ public:
         dawstreamer::RecorderState recorderState = dawstreamer::RecorderState::offline;
         std::uint64_t recorderHeartbeat = 0;
         std::uint64_t recorderTakeFrames = 0;
+
+        bool recordingParameterOn = false;
+        bool recordingControlOnline = false;
+        bool recordingControlPending = false;
     };
 
     DAWStreamerAudioProcessor();
@@ -87,13 +93,27 @@ public:
     DiagnosticsSnapshot getDiagnosticsSnapshot() const noexcept;
 
 private:
+    void parameterValueChanged(int parameterIndex, float newValue) override;
+    void parameterGestureChanged(int parameterIndex, bool gestureIsStarting) override;
+    void timerCallback() override;
+
+    void syncRecordingParameterFromRecorder(bool recording);
     dawstreamer::SharedAudioTransport* transportForRole(dawstreamer::StreamRole role) const noexcept;
 
     std::array<std::unique_ptr<dawstreamer::SharedAudioTransport>, dawstreamer::kStreamRoleCount> audioTransports;
     dawstreamer::SharedRecorderControl recorderControl;
+    juce::AudioParameterBool* recordingParameter = nullptr;
+
     std::atomic<int> currentRole { -1 };
     std::uint64_t ownerToken = 0;
     std::uint64_t producerFrameCounter = 0;
+
+    std::atomic<bool> suppressRecordingParameterCommand { false };
+    std::atomic<bool> pendingRecordingCommand { false };
+    std::atomic<bool> pendingDesiredRecording { false };
+    std::atomic<bool> recorderOnlineForControl { false };
+    std::uint64_t previousRecorderHeartbeat = 0;
+    double lastRecorderHeartbeatChangeMs = 0.0;
 
     std::atomic<std::uint64_t> processBlockCount { 0 };
     std::atomic<bool> playHeadAvailable { false };
