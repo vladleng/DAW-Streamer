@@ -102,7 +102,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer v0.2.0 Stage 8A", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer v0.2.0", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
@@ -131,6 +131,17 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
              recorderOnline
                  ? juce::String(dawstreamer::formatRecordingTime(snapshot.recorderTakeFrames))
                  : juce::String("N/A"));
+
+    juce::String hostControlState = "OFFLINE";
+    if (snapshot.recordingControlOnline)
+    {
+        if (snapshot.recordingControlPending)
+            hostControlState = snapshot.recordingParameterOn ? "PENDING ON" : "PENDING OFF";
+        else
+            hostControlState = snapshot.recordingParameterOn ? "ON" : "OFF";
+    }
+    drawLine("Host Recording", hostControlState);
+
     drawLine("Role status", snapshot.roleClaimed ? "CLAIMED" : "DUPLICATE / NOT CLAIMED");
     drawLine("processBlock", callbacksActive ? "RUNNING" : "NO CALLBACKS");
     drawLine("Callback count", juce::String(snapshot.processBlockCount));
@@ -157,6 +168,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("The button follows the Recorder's authoritative state. DAW transport remains independent.",
+    graphics.drawText("Map the VST3 parameter 'Recording' to Performance Mode. Recorder remains authoritative.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }

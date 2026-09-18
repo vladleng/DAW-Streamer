@@ -35,7 +35,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Version 0.2.0 - Stage 8A recording time",
+        stage.setText("Version 0.2.0",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -322,7 +322,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.2.0-stage8a";
+        return "0.2.0";
     }
 
     bool moreThanOneInstanceAllowed() override
