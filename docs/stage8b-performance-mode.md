@@ -6,7 +6,7 @@ Expose DAW Streamer's existing global Recorder Record/Stop control as a generic 
 
 ## VST3 parameter
 
-The plugin now exposes one boolean parameter:
+The plugin exposes one boolean parameter:
 
 - ID: `recording`
 - Name: `Recording`
@@ -35,21 +35,46 @@ If Recorder is offline or enters ERROR, the host-facing parameter returns to OFF
 
 Stage 8B uses only normal VST3 parameter behavior. There is no Fender/PreSonus-specific API in this stage.
 
-If Fender Studio accepts the `Recording` command but does not visually update a mapped Performance Mode button when Recorder state changes elsewhere, that host-feedback limitation is documented and the enhanced feedback path is deferred to version 0.4 / Fender Studio Enhanced VST3.
+## Manual validation in Fender Studio
 
-## Manual acceptance in Fender Studio
+Windows CI passed after the JUCE 9 `AudioParameterBool` accessor fix.
 
-1. Install the Stage 8B VST3 and run the matching Recorder.
-2. Open the target Show with the normal Vocal, Guitar, Keys and Playback sender instances.
-3. Open one DAW Streamer instance and confirm `Host Recording` shows `OFF` while Recorder is idle.
-4. In Fender Studio Performance Mode, map a toggle/button control to the DAW Streamer VST3 parameter named `Recording` from one sender instance.
-5. Press the mapped control. Recorder must start a take, the mapped parameter must become ON, and all DAW Streamer instances must report the same Recorder state.
-6. Press it again. Recorder must stop and the parameter must return to OFF.
-7. Start recording from the standalone Recorder window. Verify the VST3 `Recording` state follows it. Observe whether the mapped Performance Mode control also updates visually.
-8. Stop from a different DAW Streamer instance. Verify all instances return to OFF and observe Performance Mode feedback.
-9. Repeat Record/Stop while DAW transport is stopped and while switching songs. Recorder control must remain independent of DAW Play/Stop.
-10. Confirm normal audio recording remains synchronized and `Drop` remains 0.
+Manual validation in the target Show Page passed:
+
+- [x] Fender Studio exposes `Recording` as an assignable DAW Streamer parameter.
+- [x] `Recording` can be assigned to a Performance Mode button.
+- [x] Performance Mode starts and stops DAW Streamer recording.
+- [x] Recorder remains the authoritative state.
+- [x] All DAW Streamer instances follow the shared Recorder state.
+- [x] The mapped Performance Mode button visually changes between OFF and ON from standard VST3 parameter feedback.
+- [x] DAW Play/Stop remains independent from DAW Streamer Record/Stop.
+
+This confirms that the software-side bidirectional Performance Mode path works without Fender-specific extensions.
+
+## Final hardware validation - MIDI Captain
+
+Before accepting Stage 8B, test the mapped `Recording` control with the MIDI Captain configuration/firmware that supports two-way feedback.
+
+Acceptance checklist:
+
+- [ ] Pressing the MIDI Captain button changes the Performance Mode `Recording` control and starts Recorder.
+- [ ] Pressing it again stops Recorder.
+- [ ] MIDI Captain LED/display turns ON after the recording state is acknowledged.
+- [ ] MIDI Captain LED/display turns OFF after Stop is acknowledged.
+- [ ] Starting/stopping directly from the standalone Recorder propagates through Performance Mode back to MIDI Captain.
+- [ ] Starting/stopping from another DAW Streamer instance produces the same controller feedback.
+- [ ] Several quick Record/Stop operations do not leave MIDI Captain showing the opposite state.
+
+Expected command chain:
+
+`MIDI Captain -> Fender Studio Performance Mode -> VST3 Recording -> RecorderControl -> Recorder`
+
+Expected feedback chain:
+
+`Recorder -> authoritative state -> VST3 Recording -> Fender Studio Performance Mode -> MIDI Captain`
+
+If the final controller-feedback link fails, do not add Fender-specific workarounds to 0.2. First determine whether the limitation is in Fender Studio control-surface feedback or in the MIDI Captain mapping/firmware. Fender-specific integration remains reserved for Stage 10 / version 0.4.
 
 ## Acceptance
 
-Stage 8B is accepted when generic VST3 control reliably starts/stops Recorder and all plugin instances follow Recorder's authoritative state. Bidirectional visual feedback inside Fender Studio Performance Mode is accepted if the host exposes it through standard VST3 parameter feedback; otherwise the limitation is recorded for Stage 10 / version 0.4.
+Stage 8B is accepted when the generic VST3 control reliably starts/stops Recorder, all plugin instances and Performance Mode follow Recorder's authoritative state, and the MIDI Captain two-way feedback test is documented.
