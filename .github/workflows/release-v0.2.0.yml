@@ -4,13 +4,14 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   release:
-    if: github.event.head_commit.message == 'Publish v0.2.0 release'
+    if: github.event_name == 'push' && github.event.head_commit.message == 'Publish v0.2.0 release'
     runs-on: windows-2022
 
     steps:
@@ -61,3 +62,16 @@ jobs:
             --title 'DAW Streamer v0.2.0' `
             --notes-file 'docs/release-v0.2.0.md' `
             'DAW-Streamer-v0.2.0-windows-x64.zip#Windows x64 build'
+
+  sync-notes:
+    if: (github.event_name == 'push' && github.event.head_commit.message == 'Refresh v0.2.0 release notes') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update GitHub Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit v0.2.0 --notes-file docs/release-v0.2.0.md
