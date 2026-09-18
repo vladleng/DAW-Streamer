@@ -53,28 +53,28 @@ This confirms that the software-side bidirectional Performance Mode path works w
 
 ## Final hardware validation - MIDI Captain
 
-Before accepting Stage 8B, test the mapped `Recording` control with the MIDI Captain configuration/firmware that supports two-way feedback.
+The mapped `Recording` control was tested with MIDI Captain using the user's two-way feedback firmware/configuration.
 
 Acceptance checklist:
 
-- [ ] Pressing the MIDI Captain button changes the Performance Mode `Recording` control and starts Recorder.
-- [ ] Pressing it again stops Recorder.
-- [ ] MIDI Captain LED/display turns ON after the recording state is acknowledged.
-- [ ] MIDI Captain LED/display turns OFF after Stop is acknowledged.
-- [ ] Starting/stopping directly from the standalone Recorder propagates through Performance Mode back to MIDI Captain.
-- [ ] Starting/stopping from another DAW Streamer instance produces the same controller feedback.
-- [ ] Several quick Record/Stop operations do not leave MIDI Captain showing the opposite state.
+- [x] Pressing the MIDI Captain button changes the Performance Mode `Recording` control and starts Recorder.
+- [x] Pressing it again stops Recorder.
+- [x] MIDI Captain LED/display turns ON after the recording state is acknowledged.
+- [x] MIDI Captain LED/display turns OFF after Stop is acknowledged.
+- [x] Starting/stopping directly from the standalone Recorder propagates through Performance Mode back to MIDI Captain.
+- [x] Starting/stopping from another DAW Streamer instance produces the same controller feedback.
+- [x] Several quick Record/Stop operations do not leave MIDI Captain showing the opposite state.
 
-Expected command chain:
+Confirmed command chain:
 
 `MIDI Captain -> Fender Studio Performance Mode -> VST3 Recording -> RecorderControl -> Recorder`
 
-Expected feedback chain:
+Confirmed feedback chain:
 
 `Recorder -> authoritative state -> VST3 Recording -> Fender Studio Performance Mode -> MIDI Captain`
 
-If the final controller-feedback link fails, do not add Fender-specific workarounds to 0.2. First determine whether the limitation is in Fender Studio control-surface feedback or in the MIDI Captain mapping/firmware. Fender-specific integration remains reserved for Stage 10 / version 0.4.
+The full bidirectional path therefore works through standard VST3 parameter feedback in the tested Fender Studio + MIDI Captain setup. No Fender-specific workaround is required for version 0.2.
 
 ## Acceptance
 
-Stage 8B is accepted when the generic VST3 control reliably starts/stops Recorder, all plugin instances and Performance Mode follow Recorder's authoritative state, and the MIDI Captain two-way feedback test is documented.
+Stage 8B is accepted. Generic VST3 control reliably starts/stops Recorder, all plugin instances and Performance Mode follow Recorder's authoritative state, and MIDI Captain two-way feedback is confirmed. Version 0.2.0 is ready for release.
