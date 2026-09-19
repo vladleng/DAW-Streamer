@@ -50,8 +50,35 @@ target_compile_features(DAWStreamerRecordingTimeTests PRIVATE cxx_std_20)
 
 add_test(NAME recording-time-format COMMAND DAWStreamerRecordingTimeTests)
 
+add_executable(DAWStreamerMidiFileExporterTests
+    MidiFileExporterTests.cpp
+    ../recorder/Source/MidiFileExporter.cpp
+    ../recorder/Source/MidiFileExporter.h
+)
+
+target_include_directories(DAWStreamerMidiFileExporterTests
+    PRIVATE
+        ../recorder/Source
+)
+
+target_link_libraries(DAWStreamerMidiFileExporterTests
+    PRIVATE
+        DAWStreamerShared
+        juce::juce_audio_basics
+        juce::juce_core
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+target_compile_features(DAWStreamerMidiFileExporterTests PRIVATE cxx_std_20)
+
+add_test(NAME midi-file-export COMMAND DAWStreamerMidiFileExporterTests)
+
 add_executable(DAWStreamerRecorderStartupTests
     RecorderStartupTests.cpp
+    ../recorder/Source/MidiFileExporter.cpp
+    ../recorder/Source/MidiFileExporter.h
     ../recorder/Source/RecorderEngine.cpp
     ../recorder/Source/RecorderEngine.h
 )

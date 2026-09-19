@@ -206,6 +206,9 @@ void RecorderEngine::beginTake()
     midiLastTakeFrameInternal = 0;
     midiLastMessageSizeInternal = 0;
     midiLastMessageBytesInternal.fill(0);
+    midiFileWrittenInternal = false;
+    midiFilePathInternal.clear();
+    midiExportErrorInternal.clear();
     capturedMidiEvents.clear();
     capturedMidiEvents.reserve(16384);
     lastError.clear();
@@ -313,6 +316,7 @@ void RecorderEngine::finishTake()
     sessionActiveInternal = false;
     waitingForStreamsInternal = false;
     closeWriters(true);
+    exportMidiTake();
 }
 
 void RecorderEngine::drainPendingAudioForStop()
@@ -386,9 +390,8 @@ void RecorderEngine::handleMidiEvent(std::size_t streamIndex, const dawstreamer:
         return;
     }
 
-    CapturedMidiEvent captured;
+    dawstreamer::RecordedMidiEvent captured;
     captured.takeFrame = stream.takeBaseOffset + (event.producerFrame - stream.producerAnchorFrame);
-    captured.sourceRole = role;
     captured.size = event.size;
     std::copy_n(event.data.begin(), event.size, captured.data.begin());
 
@@ -402,6 +405,23 @@ void RecorderEngine::handleMidiEvent(std::size_t streamIndex, const dawstreamer:
     std::copy_n(captured.data.begin(), copyBytes, midiLastMessageBytesInternal.begin());
 
     capturedMidiEvents.push_back(captured);
+}
+
+void RecorderEngine::exportMidiTake()
+{
+    midiFileWrittenInternal = false;
+    midiFilePathInternal.clear();
+    midiExportErrorInternal.clear();
+
+    if (capturedMidiEvents.empty())
+        return;
+
+    const auto result = dawstreamer::writeMidiTakeFile(takeDirectory,
+                                                       capturedMidiEvents,
+                                                       globalTakeFrontier);
+    midiFileWrittenInternal = result.written;
+    midiFilePathInternal = result.file.getFullPathName();
+    midiExportErrorInternal = result.error;
 }
 
 bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
@@ -671,6 +691,9 @@ void RecorderEngine::publishSnapshot()
     result.midi.lastTakeFrame = midiLastTakeFrameInternal;
     result.midi.lastMessageSize = midiLastMessageSizeInternal;
     result.midi.lastMessageBytes = midiLastMessageBytesInternal;
+    result.midi.fileWritten = midiFileWrittenInternal;
+    result.midi.filePath = midiFilePathInternal;
+    result.midi.exportError = midiExportErrorInternal;
 
     for (std::size_t i = 0; i < streams.size(); ++i)
     {

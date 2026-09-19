@@ -35,7 +35,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Version 0.3b - MIDI capture",
+        stage.setText("Version 0.3.0 - audio + MIDI capture",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -290,6 +290,11 @@ private:
                  << dawstreamer::formatRecordingTime(snapshot.midi.lastTakeFrame);
         }
 
+        if (snapshot.midi.fileWritten)
+            text << "\nMIDI file: " << snapshot.midi.filePath;
+        else if (!snapshot.midi.exportError.isEmpty())
+            text << "\nMIDI export error: " << snapshot.midi.exportError;
+
         if (!snapshot.lastError.isEmpty())
             text << "\n\nError: " << snapshot.lastError;
 
@@ -360,7 +365,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.3b";
+        return "0.3.0";
     }
 
     bool moreThanOneInstanceAllowed() override
