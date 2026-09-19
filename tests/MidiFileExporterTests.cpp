@@ -6,7 +6,7 @@
 
 namespace
 {
-bool near(double actual, double expected, double tolerance = 0.0002)
+bool near(double actual, double expected, double tolerance = 0.0006)
 {
     return std::abs(actual - expected) <= tolerance;
 }
@@ -20,8 +20,8 @@ int fail(const char* message)
 
 int main()
 {
-    if (!near(dawstreamer::takeFrameToMidiTick(48000), 6000.0, 0.000001))
-        return fail("48 kHz frame-to-SMPTE-tick conversion is incorrect");
+    if (!near(dawstreamer::takeFrameToMidiTick(48000), 1920.0, 0.000001))
+        return fail("48 kHz frame-to-PPQ-tick conversion is incorrect");
 
     const auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
                                .getChildFile("DAWStreamerMidiExportTest_" + juce::Uuid().toString());
@@ -70,8 +70,11 @@ int main()
     if (midiFileType != 0)
         return fail("Exported MIDI file is not SMF type 0");
 
-    if (midiFile.getTimeFormat() >= 0)
-        return fail("Exported MIDI file is not using SMPTE absolute time");
+    if (midiFile.getNumTracks() != 1)
+        return fail("Exported MIDI file is not single-track");
+
+    if (midiFile.getTimeFormat() != dawstreamer::kMidiFileTicksPerQuarterNote)
+        return fail("Exported MIDI file is not using the expected PPQ timebase");
 
     midiFile.convertTimestampTicksToSeconds();
     const auto* track = midiFile.getTrack(0);
@@ -100,10 +103,10 @@ int main()
     if (!near(musicalEventTimes[0], 0.5)
         || !near(musicalEventTimes[1], 1.0)
         || !near(musicalEventTimes[2], 1.5))
-        return fail("Exported MIDI event times do not match take-frame positions");
+        return fail("Exported MIDI event times do not match take-frame positions at the nominal SMF tempo");
 
     if (!near(endOfTrackTime, 2.0))
-        return fail("End-of-track time does not match audio take length");
+        return fail("End-of-track time does not match audio take length at the nominal SMF tempo");
 
     directory.deleteRecursively();
     return 0;
