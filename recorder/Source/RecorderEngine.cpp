@@ -22,6 +22,7 @@ RecorderEngine::RecorderEngine(juce::File outputRootToUse)
         auto& stream = streams[i];
         stream.role = static_cast<dawstreamer::StreamRole>(i);
         stream.transport = std::make_unique<dawstreamer::SharedAudioTransport>(stream.role);
+        stream.midiTransport = std::make_unique<dawstreamer::SharedMidiTransport>(stream.role);
     }
 
     lastSharedCommandWord = recorderControl.snapshot().commandWord;
@@ -94,6 +95,8 @@ void RecorderEngine::run()
 
         bool consumedAny = false;
 
+        // Audio is consumed before MIDI. The sender also publishes audio before
+        // MIDI for each callback, so the role's take anchor is established first.
         for (std::size_t i = 0; i < streams.size(); ++i)
         {
             auto& stream = streams[i];
@@ -113,6 +116,18 @@ void RecorderEngine::run()
             handleAudioBlock(i, block);
             if (!sessionActiveInternal)
                 break;
+        }
+
+        for (std::size_t i = 0; i < streams.size(); ++i)
+        {
+            auto& stream = streams[i];
+            if (stream.midiTransport == nullptr)
+                continue;
+
+            if (stream.midiTransport->pendingEvents() > 0)
+                consumedAny = true;
+
+            drainMidiEvents(i, 512);
         }
 
         if (sessionActiveInternal)
@@ -183,6 +198,16 @@ void RecorderEngine::beginTake()
     takeOriginEstablished = false;
     takeHostOriginValid = false;
     takeHostOriginSamples = 0;
+    midiSourceSeenInternal = false;
+    midiSourceRoleInternal = dawstreamer::StreamRole::Keys;
+    midiReceivedEventsInternal = 0;
+    midiIgnoredOtherRoleEventsInternal = 0;
+    midiFirstTakeFrameInternal = 0;
+    midiLastTakeFrameInternal = 0;
+    midiLastMessageSizeInternal = 0;
+    midiLastMessageBytesInternal.fill(0);
+    capturedMidiEvents.clear();
+    capturedMidiEvents.reserve(16384);
     lastError.clear();
 
     for (auto& stream : streams)
@@ -197,6 +222,19 @@ void RecorderEngine::beginTake()
         else
         {
             stream.counterBaselineValid = false;
+        }
+
+        if (stream.midiTransport != nullptr)
+        {
+            stream.midiTransport->discardPending();
+            stream.midiDroppedBaseline = stream.midiTransport->droppedEvents();
+            stream.midiOversizedBaseline = stream.midiTransport->oversizedEvents();
+            stream.midiProducerEventsBaseline = stream.midiTransport->producerEvents();
+            stream.midiCounterBaselineValid = true;
+        }
+        else
+        {
+            stream.midiCounterBaselineValid = false;
         }
 
         stream.writer.reset();
@@ -270,6 +308,7 @@ void RecorderEngine::finishTake()
     }
 
     drainPendingAudioForStop();
+    drainPendingMidiForStop();
 
     sessionActiveInternal = false;
     waitingForStreamsInternal = false;
@@ -301,6 +340,70 @@ void RecorderEngine::drainPendingAudioForStop()
     }
 }
 
+void RecorderEngine::drainPendingMidiForStop()
+{
+    constexpr std::uint32_t kMaximumDrainPerStream = dawstreamer::kMidiRingCapacity * 2;
+    for (std::size_t i = 0; i < streams.size(); ++i)
+        drainMidiEvents(i, kMaximumDrainPerStream);
+}
+
+void RecorderEngine::drainMidiEvents(std::size_t streamIndex, std::uint32_t maximumEvents)
+{
+    auto& stream = streams[streamIndex];
+    if (stream.midiTransport == nullptr)
+        return;
+
+    dawstreamer::MidiEvent event;
+    std::uint32_t drained = 0;
+    while (drained < maximumEvents && stream.midiTransport->pop(event))
+    {
+        if (sessionActiveInternal)
+            handleMidiEvent(streamIndex, event);
+        ++drained;
+    }
+}
+
+void RecorderEngine::handleMidiEvent(std::size_t streamIndex, const dawstreamer::MidiEvent& event)
+{
+    if (!sessionActiveInternal || event.size == 0 || event.size > dawstreamer::kMaxMidiMessageBytes)
+        return;
+
+    ++midiReceivedEventsInternal;
+
+    auto& stream = streams[streamIndex];
+    if (stream.writer == nullptr || event.producerFrame < stream.producerAnchorFrame)
+        return;
+
+    const auto role = stream.role;
+    if (!midiSourceSeenInternal)
+    {
+        midiSourceSeenInternal = true;
+        midiSourceRoleInternal = role;
+    }
+    else if (role != midiSourceRoleInternal)
+    {
+        ++midiIgnoredOtherRoleEventsInternal;
+        return;
+    }
+
+    CapturedMidiEvent captured;
+    captured.takeFrame = stream.takeBaseOffset + (event.producerFrame - stream.producerAnchorFrame);
+    captured.sourceRole = role;
+    captured.size = event.size;
+    std::copy_n(event.data.begin(), event.size, captured.data.begin());
+
+    if (capturedMidiEvents.empty())
+        midiFirstTakeFrameInternal = captured.takeFrame;
+
+    midiLastTakeFrameInternal = std::max(midiLastTakeFrameInternal, captured.takeFrame);
+    midiLastMessageSizeInternal = captured.size;
+    midiLastMessageBytesInternal.fill(0);
+    const auto copyBytes = std::min<std::uint32_t>(3, captured.size);
+    std::copy_n(captured.data.begin(), copyBytes, midiLastMessageBytesInternal.begin());
+
+    capturedMidiEvents.push_back(captured);
+}
+
 bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
                                                 const dawstreamer::AudioBlock& firstBlock)
 {
@@ -310,7 +413,7 @@ bool RecorderEngine::startStreamFromFirstBlock(std::size_t streamIndex,
 
     if (firstBlock.sampleRate != kRequiredSampleRate)
     {
-        failTake("Stage 5B requires all sources at 48 kHz. Resampling is disabled.");
+        failTake("DAW Streamer requires all sources at 48 kHz. Resampling is disabled.");
         return false;
     }
 
@@ -559,6 +662,16 @@ void RecorderEngine::publishSnapshot()
         result.sessionName = configuredSessionName;
     }
 
+    result.midi.sourceSeen = midiSourceSeenInternal;
+    result.midi.sourceRole = midiSourceRoleInternal;
+    result.midi.receivedEvents = midiReceivedEventsInternal;
+    result.midi.capturedEvents = static_cast<std::uint64_t>(capturedMidiEvents.size());
+    result.midi.ignoredOtherRoleEvents = midiIgnoredOtherRoleEventsInternal;
+    result.midi.firstTakeFrame = midiFirstTakeFrameInternal;
+    result.midi.lastTakeFrame = midiLastTakeFrameInternal;
+    result.midi.lastMessageSize = midiLastMessageSizeInternal;
+    result.midi.lastMessageBytes = midiLastMessageBytesInternal;
+
     for (std::size_t i = 0; i < streams.size(); ++i)
     {
         const auto& state = streams[i];
@@ -590,6 +703,20 @@ void RecorderEngine::publishSnapshot()
             out.sourceSampleRate = state.transport->lastSampleRate();
             out.sourceChannels = state.transport->lastNumChannels();
             out.sourceBlockFrames = state.transport->lastNumFrames();
+        }
+
+        if (state.midiTransport != nullptr)
+        {
+            result.midi.pendingEvents += state.midiTransport->pendingEvents();
+
+            const auto droppedNow = state.midiTransport->droppedEvents();
+            const auto oversizedNow = state.midiTransport->oversizedEvents();
+            result.midi.droppedEvents += state.midiCounterBaselineValid && droppedNow >= state.midiDroppedBaseline
+                ? droppedNow - state.midiDroppedBaseline
+                : droppedNow;
+            result.midi.oversizedEvents += state.midiCounterBaselineValid && oversizedNow >= state.midiOversizedBaseline
+                ? oversizedNow - state.midiOversizedBaseline
+                : oversizedNow;
         }
     }
 
