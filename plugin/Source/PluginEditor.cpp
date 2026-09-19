@@ -149,7 +149,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer v0.3c - MIDI compatibility", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer v0.3.0", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
@@ -231,6 +231,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("v0.3c writes one-track SMF Type 0 MIDI with conventional 960-PPQ timing.",
+    graphics.drawText("v0.3.0 captures synchronized audio and single-track MIDI for later DAW editing.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }
