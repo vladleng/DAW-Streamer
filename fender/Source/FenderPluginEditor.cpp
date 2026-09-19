@@ -49,8 +49,18 @@ DAWStreamerFenderEditor::DAWStreamerFenderEditor(DAWStreamerFenderProcessor& pro
         const auto index = roleBox.getSelectedId() - 1;
         if (index >= 0 && index < static_cast<int>(dawstreamer::kStreamRoleCount))
             processor.setStreamRole(static_cast<dawstreamer::StreamRole>(index));
+        updateSenderNamePlaceholder();
     };
     addAndMakeVisible(roleBox);
+
+    senderNameEditor.setText(processor.getSenderName(), false);
+    senderNameEditor.setSelectAllWhenFocused(true);
+    senderNameEditor.onTextChange = [this]
+    {
+        processor.setSenderName(senderNameEditor.getText());
+    };
+    addAndMakeVisible(senderNameEditor);
+    updateSenderNamePlaceholder();
 
     sessionEditor.setText(processor.getMasterSessionName(), false);
     sessionEditor.setSelectAllWhenFocused(true);
@@ -137,7 +147,7 @@ void DAWStreamerFenderEditor::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(0xff17191c));
     graphics.setColour(juce::Colours::white);
     graphics.setFont(20.0f);
-    graphics.drawText("DAW Streamer Fender", 24, 14, getWidth() - 48, 30,
+    graphics.drawText("DAW Streamer Fender 0.1b", 24, 14, getWidth() - 48, 30,
                       juce::Justification::centredLeft);
 
     graphics.setFont(13.0f);
@@ -171,8 +181,9 @@ void DAWStreamerFenderEditor::resized()
 {
     const auto master = processor.getPluginMode() == DAWStreamerFenderProcessor::PluginMode::masterRecorder;
 
-    roleBox.setBounds(104, 56, 220, 30);
-    sessionEditor.setBounds(104, 56, 360, 30);
+    roleBox.setBounds(104, 56, 132, 30);
+    senderNameEditor.setBounds(246, 56, 290, 30);
+    sessionEditor.setBounds(104, 56, 432, 30);
 
     status.setBounds(24, 98, getWidth() - 48, 28);
     recordingTime.setBounds(24, 128, getWidth() - 48, 34);
@@ -234,6 +245,7 @@ void DAWStreamerFenderEditor::updateControlVisibility()
     const auto detailsOpen = detailsButton.getToggleState();
 
     roleBox.setVisible(!master);
+    senderNameEditor.setVisible(!master);
     sessionEditor.setVisible(master);
 
     modeBox.setVisible(setupOpen);
@@ -263,6 +275,13 @@ void DAWStreamerFenderEditor::updateLayoutSize()
     setSize(kEditorWidth, height);
 }
 
+void DAWStreamerFenderEditor::updateSenderNamePlaceholder()
+{
+    const auto fallback = juce::String(dawstreamer::streamRoleName(processor.getStreamRole()));
+    senderNameEditor.setTextToShowWhenEmpty("Name (default: " + fallback + ")",
+                                            juce::Colour(0xff7f858c));
+}
+
 void DAWStreamerFenderEditor::timerCallback()
 {
     diagnostics = processor.getDiagnosticsSnapshot();
@@ -275,7 +294,17 @@ void DAWStreamerFenderEditor::timerCallback()
 
     const auto expectedRole = static_cast<int>(diagnostics.streamRole) + 1;
     if (roleBox.getSelectedId() != expectedRole)
+    {
         roleBox.setSelectedId(expectedRole, juce::dontSendNotification);
+        updateSenderNamePlaceholder();
+    }
+
+    if (!senderNameEditor.hasKeyboardFocus(true))
+    {
+        const auto currentName = processor.getSenderName();
+        if (senderNameEditor.getText() != currentName)
+            senderNameEditor.setText(currentName, false);
+    }
 
     const auto recorderIsRecording = diagnostics.recorderState == dawstreamer::RecorderState::waitingForStreams
                                   || diagnostics.recorderState == dawstreamer::RecorderState::recording;
@@ -296,7 +325,8 @@ void DAWStreamerFenderEditor::timerCallback()
     {
         updateSenderDetails();
         modeBox.setEnabled(true);
-        roleBox.setEnabled(true);
+        roleBox.setEnabled(!recorderIsRecording);
+        senderNameEditor.setEnabled(!recorderIsRecording);
     }
 
     updateControlVisibility();
@@ -351,7 +381,7 @@ void DAWStreamerFenderEditor::updateMasterDetails(const RecorderEngine::Snapshot
                         juce::dontSendNotification);
 
     midiHealth.setText(snapshot.midi.sourceSeen
-                           ? juce::String("MIDI  OK  ") + dawstreamer::streamRoleName(snapshot.midi.sourceRole)
+                           ? juce::String("MIDI  OK  ") + processor.getPublishedNameForRole(snapshot.midi.sourceRole)
                            : juce::String("MIDI  waiting"),
                        juce::dontSendNotification);
 
@@ -382,7 +412,11 @@ void DAWStreamerFenderEditor::updateMasterDetails(const RecorderEngine::Snapshot
         if (stream.producerPresent)
             connection = (nowMs - lastCallbackChangeMs[i] < 1000.0) ? "ACTIVE" : "CLAIMED";
 
-        text << dawstreamer::streamRoleName(stream.role) << ": " << connection;
+        const auto publishedName = processor.getPublishedNameForRole(stream.role);
+        text << publishedName;
+        if (publishedName != dawstreamer::streamRoleName(stream.role))
+            text << " [" << dawstreamer::streamRoleName(stream.role) << "]";
+        text << ": " << connection;
         if (stream.sourceSampleRate != 0)
             text << "  " << stream.sourceSampleRate << " Hz / " << stream.sourceChannels
                  << "ch / block " << stream.sourceBlockFrames;
@@ -396,7 +430,7 @@ void DAWStreamerFenderEditor::updateMasterDetails(const RecorderEngine::Snapshot
 
     text << "\nMIDI: ";
     if (snapshot.midi.sourceSeen)
-        text << "source " << dawstreamer::streamRoleName(snapshot.midi.sourceRole) << "  ";
+        text << "source " << processor.getPublishedNameForRole(snapshot.midi.sourceRole) << "  ";
     else
         text << "source WAITING  ";
 
@@ -461,8 +495,14 @@ void DAWStreamerFenderEditor::updateSenderDetails()
 
     alert.setText(warning, juce::dontSendNotification);
 
+    const auto customName = processor.getSenderName();
+    const auto displayName = customName.isNotEmpty()
+        ? customName
+        : juce::String(dawstreamer::streamRoleName(diagnostics.streamRole));
+
     juce::String text;
-    text << "Channel: " << dawstreamer::streamRoleName(diagnostics.streamRole) << "\n";
+    text << "Instance: " << displayName
+         << "  [slot " << dawstreamer::streamRoleName(diagnostics.streamRole) << "]\n";
     text << "processBlock: " << (callbacksActive ? "RUNNING" : "NO CALLBACKS") << "\n";
     text << "Audio: " << (diagnostics.roleClaimed ? "CLAIMED" : "NOT CLAIMED")
          << "  queue " << diagnostics.transportPendingBlocks
