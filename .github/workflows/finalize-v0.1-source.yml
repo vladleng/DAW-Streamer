@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   finalize:
-    if: contains(github.event.head_commit.message, 'Run v0.1 branding')
     runs-on: ubuntu-latest
 
     steps:
@@ -43,15 +42,19 @@ jobs:
     graphics.drawText("DAW Streamer 0.1", 24, 16, getWidth() - 48, 30,
                       juce::Justification::centredLeft);'''
 
-          if old not in text:
-              raise SystemExit('Expected v0.1c paint block was not found')
-
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          if old in text:
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          elif 'graphics.drawText("DAW Streamer 0.1"' not in text or 'graphics.drawText("Moon River Studio"' not in text:
+              raise SystemExit('Expected DAW Streamer title block was not found')
           PY
 
-      - name: Commit final branding
+      - name: Commit final branding if changed
         shell: bash
         run: |
+          if git diff --quiet -- fender/Source/FenderPluginEditor.cpp; then
+            echo "Branding already final."
+            exit 0
+          fi
           git config user.name "Vladislav"
           git config user.email "vladislavpaderin@gmail.com"
           git add fender/Source/FenderPluginEditor.cpp
