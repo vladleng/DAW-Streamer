@@ -108,3 +108,5 @@ Copy the VST3 bundle to a standard Windows VST3 folder, rescan plugins in the ho
 ## Release policy
 
 v0.3.0 is considered ready for practical use. Further issues found during continued live testing will be handled as maintenance releases such as v0.3.1, v0.3.2 and so on.
+
+The published Windows package is built and tested from `main` by GitHub Actions before the GitHub Release is created.
