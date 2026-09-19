@@ -35,7 +35,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Version 0.3b - MIDI capture",
+        stage.setText("Version 0.3c - MIDI file export",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -92,7 +92,7 @@ public:
         const auto now = juce::Time::getMillisecondCounterHiRes();
         lastCallbackChangeMs.fill(now);
 
-        setSize(1040, 690);
+        setSize(1040, 710);
         startTimerHz(5);
         timerCallback();
     }
@@ -128,7 +128,7 @@ public:
         status.setBounds(area.removeFromTop(34));
         recordingTime.setBounds(area.removeFromTop(34));
         area.removeFromTop(8);
-        details.setBounds(area.removeFromTop(306));
+        details.setBounds(area.removeFromTop(326));
         area.removeFromTop(8);
         outputPath.setBounds(area.removeFromTop(24));
         takePath.setBounds(area.removeFromTop(24));
@@ -288,6 +288,15 @@ private:
                  << dawstreamer::formatRecordingTime(snapshot.midi.firstTakeFrame)
                  << "  last="
                  << dawstreamer::formatRecordingTime(snapshot.midi.lastTakeFrame);
+
+            if (snapshot.sessionActive)
+                text << "\nMIDI file: pending until Stop";
+            else if (snapshot.midi.fileWritten)
+                text << "\nMIDI file: " << snapshot.midi.filePath;
+            else if (snapshot.midi.exportError.isNotEmpty())
+                text << "\nMIDI export ERROR: " << snapshot.midi.exportError;
+            else
+                text << "\nMIDI file: not created";
         }
 
         if (!snapshot.lastError.isEmpty())
@@ -360,7 +369,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.3b";
+        return "0.3c";
     }
 
     bool moreThanOneInstanceAllowed() override
