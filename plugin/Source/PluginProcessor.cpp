@@ -198,8 +198,6 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const auto role = getStreamRole();
     const auto blockProducerFrameStart = producerFrameCounter;
 
-    // Publish audio first. The Recorder consumes audio before MIDI, so the role's
-    // take anchor is normally established before MIDI events for this block arrive.
     if (auto* transport = transportForRole(role))
     {
         transport->push(buffer.getArrayOfReadPointers(),
@@ -493,7 +491,7 @@ bool DAWStreamerAudioProcessor::isMidiEffect() const
     return false;
 }
 
-double DAWStreamerAudioProcessor::getTailLengthSeconds()
+double DAWStreamerAudioProcessor::getTailLengthSeconds() const
 {
     return 0.0;
 }
