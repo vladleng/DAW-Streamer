@@ -4,11 +4,13 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 
 #include "SharedAudioTransport.h"
+#include "SharedMidiTransport.h"
 #include "SharedRecorderControl.h"
 
 class RecorderEngine final : private juce::Thread
@@ -34,12 +36,29 @@ public:
         float peakLinear = 0.0f;
     };
 
+    struct MidiSnapshot
+    {
+        bool sourceSeen = false;
+        dawstreamer::StreamRole sourceRole = dawstreamer::StreamRole::Keys;
+        std::uint64_t receivedEvents = 0;
+        std::uint64_t capturedEvents = 0;
+        std::uint64_t pendingEvents = 0;
+        std::uint64_t droppedEvents = 0;
+        std::uint64_t oversizedEvents = 0;
+        std::uint64_t ignoredOtherRoleEvents = 0;
+        std::uint64_t firstTakeFrame = 0;
+        std::uint64_t lastTakeFrame = 0;
+        std::uint32_t lastMessageSize = 0;
+        std::array<std::uint8_t, 3> lastMessageBytes {};
+    };
+
     struct Snapshot
     {
         bool sessionActive = false;
         bool waitingForStreams = false;
         std::uint64_t takeFrames = 0;
         std::array<StreamSnapshot, dawstreamer::kStreamRoleCount> streams {};
+        MidiSnapshot midi;
         juce::String takeDirectory;
         juce::String outputRoot;
         juce::String sessionName;
@@ -70,6 +89,7 @@ private:
     {
         dawstreamer::StreamRole role = dawstreamer::StreamRole::Vocal;
         std::unique_ptr<dawstreamer::SharedAudioTransport> transport;
+        std::unique_ptr<dawstreamer::SharedMidiTransport> midiTransport;
         std::unique_ptr<juce::AudioFormatWriter> writer;
         std::uint64_t producerAnchorFrame = 0;
         std::uint64_t takeBaseOffset = 0;
@@ -78,9 +98,21 @@ private:
         std::uint64_t gapEvents = 0;
         std::uint64_t droppedBaseline = 0;
         std::uint64_t oversizedBaseline = 0;
+        std::uint64_t midiDroppedBaseline = 0;
+        std::uint64_t midiOversizedBaseline = 0;
+        std::uint64_t midiProducerEventsBaseline = 0;
         bool counterBaselineValid = false;
+        bool midiCounterBaselineValid = false;
         std::uint32_t fileChannels = 0;
         float peakLinear = 0.0f;
+    };
+
+    struct CapturedMidiEvent
+    {
+        std::uint64_t takeFrame = 0;
+        dawstreamer::StreamRole sourceRole = dawstreamer::StreamRole::Keys;
+        std::uint32_t size = 0;
+        std::array<std::uint8_t, dawstreamer::kMaxMidiMessageBytes> data {};
     };
 
     void run() override;
@@ -90,6 +122,9 @@ private:
     void beginTake();
     void finishTake();
     void drainPendingAudioForStop();
+    void drainPendingMidiForStop();
+    void drainMidiEvents(std::size_t streamIndex, std::uint32_t maximumEvents);
+    void handleMidiEvent(std::size_t streamIndex, const dawstreamer::MidiEvent& event);
     bool startStreamFromFirstBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
     bool allStreamsStarted() const noexcept;
     bool openWriter(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
@@ -103,6 +138,7 @@ private:
 
     std::array<StreamState, dawstreamer::kStreamRoleCount> streams;
     std::array<float, dawstreamer::kMaxFramesPerBlock> silenceBuffer {};
+    std::vector<CapturedMidiEvent> capturedMidiEvents;
     dawstreamer::SharedRecorderControl recorderControl;
 
     std::atomic<int> pendingCommand { static_cast<int>(Command::none) };
@@ -113,6 +149,14 @@ private:
     bool takeHostOriginValid = false;
     std::int64_t takeHostOriginSamples = 0;
     std::uint64_t globalTakeFrontier = 0;
+    bool midiSourceSeenInternal = false;
+    dawstreamer::StreamRole midiSourceRoleInternal = dawstreamer::StreamRole::Keys;
+    std::uint64_t midiReceivedEventsInternal = 0;
+    std::uint64_t midiIgnoredOtherRoleEventsInternal = 0;
+    std::uint64_t midiFirstTakeFrameInternal = 0;
+    std::uint64_t midiLastTakeFrameInternal = 0;
+    std::uint32_t midiLastMessageSizeInternal = 0;
+    std::array<std::uint8_t, 3> midiLastMessageBytesInternal {};
     juce::File takeDirectory;
     juce::String lastError;
 

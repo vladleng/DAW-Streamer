@@ -11,6 +11,19 @@ target_compile_features(DAWStreamerSharedTests PRIVATE cxx_std_20)
 
 add_test(NAME shared-audio-transport COMMAND DAWStreamerSharedTests)
 
+add_executable(DAWStreamerMidiTransportTests
+    SharedMidiTransportTests.cpp
+)
+
+target_link_libraries(DAWStreamerMidiTransportTests
+    PRIVATE
+        DAWStreamerShared
+)
+
+target_compile_features(DAWStreamerMidiTransportTests PRIVATE cxx_std_20)
+
+add_test(NAME shared-midi-transport COMMAND DAWStreamerMidiTransportTests)
+
 add_executable(DAWStreamerRecorderControlTests
     SharedRecorderControlTests.cpp
 )

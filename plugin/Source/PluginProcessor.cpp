@@ -47,6 +47,7 @@ DAWStreamerAudioProcessor::DAWStreamerAudioProcessor()
     {
         const auto role = static_cast<dawstreamer::StreamRole>(i);
         audioTransports[i] = std::make_unique<dawstreamer::SharedAudioTransport>(role);
+        midiTransports[i] = std::make_unique<dawstreamer::SharedMidiTransport>(role);
     }
 
     setStreamRole(dawstreamer::StreamRole::Vocal);
@@ -65,6 +66,12 @@ DAWStreamerAudioProcessor::~DAWStreamerAudioProcessor()
         recordingParameter->removeListener(this);
 
     for (auto& transport : audioTransports)
+    {
+        if (transport != nullptr)
+            transport->releaseProducer(ownerToken);
+    }
+
+    for (auto& transport : midiTransports)
     {
         if (transport != nullptr)
             transport->releaseProducer(ownerToken);
@@ -104,28 +111,9 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     currentOutputChannels.store(getTotalNumOutputChannels(), std::memory_order_relaxed);
 
     const auto midiCount = midiMessages.getNumEvents();
+    midiEventsLastBlock.store(midiCount, std::memory_order_relaxed);
     if (midiCount > 0)
-    {
         midiInputSeen.store(true, std::memory_order_relaxed);
-        midiEventsLastBlock.store(midiCount, std::memory_order_relaxed);
-    }
-
-    for (const auto metadata : midiMessages)
-    {
-        const auto message = metadata.getMessage();
-        const auto type = classifyMidiMessage(message);
-        const auto* rawData = message.getRawData();
-        const auto rawSize = message.getRawDataSize();
-
-        midiEventCount.fetch_add(1, std::memory_order_relaxed);
-        lastMidiSampleOffset.store(metadata.samplePosition, std::memory_order_relaxed);
-        lastMidiMessageType.store(static_cast<int>(type), std::memory_order_relaxed);
-        lastMidiChannel.store(message.getChannel(), std::memory_order_relaxed);
-        lastMidiData1.store(rawSize > 1 ? static_cast<int>(rawData[1]) : 0,
-                            std::memory_order_relaxed);
-        lastMidiData2.store(rawSize > 2 ? static_cast<int>(rawData[2]) : 0,
-                            std::memory_order_relaxed);
-    }
 
     bool blockHasHostTime = false;
     std::int64_t blockHostTime = 0;
@@ -208,6 +196,7 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const auto sampleRate = static_cast<std::uint32_t>(
         currentSampleRate.load(std::memory_order_relaxed) + 0.5);
     const auto role = getStreamRole();
+    const auto blockProducerFrameStart = producerFrameCounter;
 
     if (auto* transport = transportForRole(role))
     {
@@ -215,10 +204,39 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                         static_cast<std::uint32_t>(totalInputChannels),
                         numFrames,
                         sampleRate,
-                        producerFrameCounter,
+                        blockProducerFrameStart,
                         blockHasHostTime,
                         blockHostTime,
                         ownerToken);
+    }
+
+    auto* midiTransport = midiTransportForRole(role);
+    for (const auto metadata : midiMessages)
+    {
+        const auto message = metadata.getMessage();
+        const auto type = classifyMidiMessage(message);
+        const auto* rawData = message.getRawData();
+        const auto rawSize = message.getRawDataSize();
+
+        midiEventCount.fetch_add(1, std::memory_order_relaxed);
+        lastMidiSampleOffset.store(metadata.samplePosition, std::memory_order_relaxed);
+        lastMidiMessageType.store(static_cast<int>(type), std::memory_order_relaxed);
+        lastMidiChannel.store(message.getChannel(), std::memory_order_relaxed);
+        lastMidiData1.store(rawSize > 1 ? static_cast<int>(rawData[1]) : 0,
+                            std::memory_order_relaxed);
+        lastMidiData2.store(rawSize > 2 ? static_cast<int>(rawData[2]) : 0,
+                            std::memory_order_relaxed);
+
+        if (midiTransport != nullptr
+            && metadata.samplePosition >= 0
+            && static_cast<std::uint32_t>(metadata.samplePosition) < numFrames)
+        {
+            midiTransport->push(rawData,
+                                static_cast<std::uint32_t>(rawSize),
+                                blockProducerFrameStart,
+                                static_cast<std::uint32_t>(metadata.samplePosition),
+                                ownerToken);
+        }
     }
 
     producerFrameCounter += numFrames;
@@ -239,12 +257,18 @@ void DAWStreamerAudioProcessor::setStreamRole(dawstreamer::StreamRole role) noex
     if (oldIndex >= 0 && oldIndex < static_cast<int>(dawstreamer::kStreamRoleCount)
         && oldIndex != newIndex)
     {
-        if (auto* oldTransport = audioTransports[static_cast<std::size_t>(oldIndex)].get())
+        const auto oldRoleIndex = static_cast<std::size_t>(oldIndex);
+        if (auto* oldTransport = audioTransports[oldRoleIndex].get())
             oldTransport->releaseProducer(ownerToken);
+        if (auto* oldMidiTransport = midiTransports[oldRoleIndex].get())
+            oldMidiTransport->releaseProducer(ownerToken);
     }
 
-    if (auto* newTransport = audioTransports[static_cast<std::size_t>(newIndex)].get())
+    const auto newRoleIndex = static_cast<std::size_t>(newIndex);
+    if (auto* newTransport = audioTransports[newRoleIndex].get())
         newTransport->claimProducer(ownerToken);
+    if (auto* newMidiTransport = midiTransports[newRoleIndex].get())
+        newMidiTransport->claimProducer(ownerToken);
 }
 
 dawstreamer::StreamRole DAWStreamerAudioProcessor::getStreamRole() const noexcept
@@ -362,6 +386,15 @@ dawstreamer::SharedAudioTransport* DAWStreamerAudioProcessor::transportForRole(
     return audioTransports[index].get();
 }
 
+dawstreamer::SharedMidiTransport* DAWStreamerAudioProcessor::midiTransportForRole(
+    dawstreamer::StreamRole role) const noexcept
+{
+    const auto index = static_cast<std::size_t>(role);
+    if (index >= midiTransports.size())
+        return nullptr;
+    return midiTransports[index].get();
+}
+
 DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDiagnosticsSnapshot() const noexcept
 {
     DiagnosticsSnapshot result;
@@ -403,6 +436,15 @@ DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDia
         result.transportDroppedBlocks = transport->droppedBlocks();
         result.transportOversizedBlocks = transport->oversizedBlocks();
         result.duplicateRoleClaims = transport->duplicateClaims();
+    }
+
+    if (auto* midiTransport = midiTransportForRole(result.streamRole))
+    {
+        result.midiTransportOpen = midiTransport->isOpen();
+        result.midiRoleClaimed = midiTransport->producerClaimedBy(ownerToken);
+        result.midiPendingEvents = midiTransport->pendingEvents();
+        result.midiDroppedEvents = midiTransport->droppedEvents();
+        result.midiOversizedEvents = midiTransport->oversizedEvents();
     }
 
     const auto control = recorderControl.snapshot();

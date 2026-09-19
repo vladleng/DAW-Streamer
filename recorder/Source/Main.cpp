@@ -35,7 +35,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Version 0.2.0",
+        stage.setText("Version 0.3b - MIDI capture",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -92,7 +92,7 @@ public:
         const auto now = juce::Time::getMillisecondCounterHiRes();
         lastCallbackChangeMs.fill(now);
 
-        setSize(1040, 650);
+        setSize(1040, 690);
         startTimerHz(5);
         timerCallback();
     }
@@ -128,7 +128,7 @@ public:
         status.setBounds(area.removeFromTop(34));
         recordingTime.setBounds(area.removeFromTop(34));
         area.removeFromTop(8);
-        details.setBounds(area.removeFromTop(266));
+        details.setBounds(area.removeFromTop(306));
         area.removeFromTop(8);
         outputPath.setBounds(area.removeFromTop(24));
         takePath.setBounds(area.removeFromTop(24));
@@ -173,6 +173,22 @@ private:
 
         const auto db = 20.0 * std::log10(static_cast<double>(peakLinear));
         return juce::String(db, 1) + " dBFS";
+    }
+
+    static juce::String midiBytesText(const RecorderEngine::MidiSnapshot& midi)
+    {
+        if (midi.lastMessageSize == 0)
+            return "N/A";
+
+        juce::String result;
+        const auto count = std::min<std::uint32_t>(midi.lastMessageSize, 3);
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            if (i > 0)
+                result << " ";
+            result << juce::String::toHexString(static_cast<int>(midi.lastMessageBytes[i])).paddedLeft('0', 2);
+        }
+        return result.toUpperCase();
     }
 
     void timerCallback() override
@@ -252,8 +268,30 @@ private:
             text << "\n";
         }
 
+        text << "\nMIDI: ";
+        if (snapshot.midi.sourceSeen)
+            text << "source=" << dawstreamer::streamRoleName(snapshot.midi.sourceRole) << "  ";
+        else
+            text << "source=WAITING  ";
+
+        text << "received=" << snapshot.midi.receivedEvents
+             << "  captured=" << snapshot.midi.capturedEvents
+             << "  queue=" << snapshot.midi.pendingEvents
+             << "  drop=" << snapshot.midi.droppedEvents
+             << "  oversized=" << snapshot.midi.oversizedEvents
+             << "  other-role=" << snapshot.midi.ignoredOtherRoleEvents
+             << "  last=" << midiBytesText(snapshot.midi);
+
+        if (snapshot.midi.capturedEvents > 0)
+        {
+            text << "\nMIDI time: first="
+                 << dawstreamer::formatRecordingTime(snapshot.midi.firstTakeFrame)
+                 << "  last="
+                 << dawstreamer::formatRecordingTime(snapshot.midi.lastTakeFrame);
+        }
+
         if (!snapshot.lastError.isEmpty())
-            text << "\nError: " << snapshot.lastError;
+            text << "\n\nError: " << snapshot.lastError;
 
         details.setText(text, juce::dontSendNotification);
 
@@ -322,7 +360,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.2.0";
+        return "0.3b";
     }
 
     bool moreThanOneInstanceAllowed() override

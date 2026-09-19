@@ -8,6 +8,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "SharedAudioTransport.h"
+#include "SharedMidiTransport.h"
 #include "SharedRecorderControl.h"
 
 class DAWStreamerAudioProcessor final : public juce::AudioProcessor,
@@ -62,6 +63,11 @@ public:
         int lastMidiChannel = 0;
         int lastMidiData1 = 0;
         int lastMidiData2 = 0;
+        bool midiTransportOpen = false;
+        bool midiRoleClaimed = false;
+        std::uint64_t midiPendingEvents = 0;
+        std::uint64_t midiDroppedEvents = 0;
+        std::uint64_t midiOversizedEvents = 0;
 
         dawstreamer::StreamRole streamRole = dawstreamer::StreamRole::Vocal;
         bool transportOpen = false;
@@ -121,8 +127,10 @@ private:
 
     void syncRecordingParameterFromRecorder(bool recording);
     dawstreamer::SharedAudioTransport* transportForRole(dawstreamer::StreamRole role) const noexcept;
+    dawstreamer::SharedMidiTransport* midiTransportForRole(dawstreamer::StreamRole role) const noexcept;
 
     std::array<std::unique_ptr<dawstreamer::SharedAudioTransport>, dawstreamer::kStreamRoleCount> audioTransports;
+    std::array<std::unique_ptr<dawstreamer::SharedMidiTransport>, dawstreamer::kStreamRoleCount> midiTransports;
     dawstreamer::SharedRecorderControl recorderControl;
     juce::AudioParameterBool* recordingParameter = nullptr;
 
