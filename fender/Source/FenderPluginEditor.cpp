@@ -12,6 +12,35 @@ constexpr int kCompactHeight = 304;
 constexpr int kSenderSetupHeight = 54;
 constexpr int kMasterSetupHeight = 92;
 constexpr int kDetailsHeight = 300;
+
+juce::String effectiveSenderName(const DAWStreamerFenderProcessor& processor)
+{
+    const auto custom = processor.getSenderName();
+    return custom.isNotEmpty()
+        ? custom
+        : juce::String(dawstreamer::streamRoleName(processor.getStreamRole()));
+}
+
+void ensureSenderHasFreeSlot(DAWStreamerFenderProcessor& processor)
+{
+    if (processor.getPluginMode() != DAWStreamerFenderProcessor::PluginMode::sender)
+        return;
+
+    if (processor.getDiagnosticsSnapshot().roleClaimed)
+        return;
+
+    for (std::size_t i = 0; i < dawstreamer::kStreamRoleCount; ++i)
+    {
+        const auto role = static_cast<dawstreamer::StreamRole>(i);
+        dawstreamer::SharedAudioTransport probe(role);
+        if (!probe.isOpen() || probe.producerOwner() != 0)
+            continue;
+
+        processor.setStreamRole(role);
+        if (processor.getDiagnosticsSnapshot().roleClaimed)
+            return;
+    }
+}
 }
 
 DAWStreamerFenderEditor::DAWStreamerFenderEditor(DAWStreamerFenderProcessor& processorToUse)
@@ -33,34 +62,26 @@ DAWStreamerFenderEditor::DAWStreamerFenderEditor(DAWStreamerFenderProcessor& pro
             modeBox.setSelectedId(processor.getPluginMode() == DAWStreamerFenderProcessor::PluginMode::masterRecorder ? 2 : 1,
                                   juce::dontSendNotification);
         }
+        else if (desired == DAWStreamerFenderProcessor::PluginMode::sender)
+        {
+            ensureSenderHasFreeSlot(processor);
+            updateSenderEditorFromState();
+        }
 
         updateControlVisibility();
         updateLayoutSize();
     };
     addAndMakeVisible(modeBox);
 
-    roleBox.addItem("Vocal", 1);
-    roleBox.addItem("Guitar", 2);
-    roleBox.addItem("Keys", 3);
-    roleBox.addItem("Playback", 4);
-    roleBox.setSelectedId(static_cast<int>(processor.getStreamRole()) + 1, juce::dontSendNotification);
-    roleBox.onChange = [this]
-    {
-        const auto index = roleBox.getSelectedId() - 1;
-        if (index >= 0 && index < static_cast<int>(dawstreamer::kStreamRoleCount))
-            processor.setStreamRole(static_cast<dawstreamer::StreamRole>(index));
-        updateSenderNamePlaceholder();
-    };
-    addAndMakeVisible(roleBox);
+    ensureSenderHasFreeSlot(processor);
 
-    senderNameEditor.setText(processor.getSenderName(), false);
+    senderNameEditor.setText(effectiveSenderName(processor), false);
     senderNameEditor.setSelectAllWhenFocused(true);
     senderNameEditor.onTextChange = [this]
     {
         processor.setSenderName(senderNameEditor.getText());
     };
     addAndMakeVisible(senderNameEditor);
-    updateSenderNamePlaceholder();
 
     sessionEditor.setText(processor.getMasterSessionName(), false);
     sessionEditor.setSelectAllWhenFocused(true);
@@ -147,14 +168,14 @@ void DAWStreamerFenderEditor::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(0xff17191c));
     graphics.setColour(juce::Colours::white);
     graphics.setFont(20.0f);
-    graphics.drawText("DAW Streamer Fender 0.1b", 24, 14, getWidth() - 48, 30,
+    graphics.drawText("DAW Streamer 0.1c", 24, 14, getWidth() - 48, 30,
                       juce::Justification::centredLeft);
 
     graphics.setFont(13.0f);
     graphics.setColour(juce::Colour(0xffaeb4bc));
 
     const auto master = processor.getPluginMode() == DAWStreamerFenderProcessor::PluginMode::masterRecorder;
-    graphics.drawText(master ? "Session" : "Channel", 24, 56, 80, 28,
+    graphics.drawText(master ? "Session" : "Instance", 24, 56, 80, 28,
                       juce::Justification::centredLeft);
 
     int nextSectionY = kCompactHeight;
@@ -181,8 +202,7 @@ void DAWStreamerFenderEditor::resized()
 {
     const auto master = processor.getPluginMode() == DAWStreamerFenderProcessor::PluginMode::masterRecorder;
 
-    roleBox.setBounds(104, 56, 132, 30);
-    senderNameEditor.setBounds(246, 56, 290, 30);
+    senderNameEditor.setBounds(104, 56, 432, 30);
     sessionEditor.setBounds(104, 56, 432, 30);
 
     status.setBounds(24, 98, getWidth() - 48, 28);
@@ -244,7 +264,6 @@ void DAWStreamerFenderEditor::updateControlVisibility()
     const auto setupOpen = setupButton.getToggleState();
     const auto detailsOpen = detailsButton.getToggleState();
 
-    roleBox.setVisible(!master);
     senderNameEditor.setVisible(!master);
     sessionEditor.setVisible(master);
 
@@ -275,11 +294,14 @@ void DAWStreamerFenderEditor::updateLayoutSize()
     setSize(kEditorWidth, height);
 }
 
-void DAWStreamerFenderEditor::updateSenderNamePlaceholder()
+void DAWStreamerFenderEditor::updateSenderEditorFromState()
 {
-    const auto fallback = juce::String(dawstreamer::streamRoleName(processor.getStreamRole()));
-    senderNameEditor.setTextToShowWhenEmpty("Name (default: " + fallback + ")",
-                                            juce::Colour(0xff7f858c));
+    if (senderNameEditor.hasKeyboardFocus(true))
+        return;
+
+    const auto desired = effectiveSenderName(processor);
+    if (senderNameEditor.getText() != desired)
+        senderNameEditor.setText(desired, false);
 }
 
 void DAWStreamerFenderEditor::timerCallback()
@@ -292,19 +314,7 @@ void DAWStreamerFenderEditor::timerCallback()
     if (modeBox.getSelectedId() != expectedMode)
         modeBox.setSelectedId(expectedMode, juce::dontSendNotification);
 
-    const auto expectedRole = static_cast<int>(diagnostics.streamRole) + 1;
-    if (roleBox.getSelectedId() != expectedRole)
-    {
-        roleBox.setSelectedId(expectedRole, juce::dontSendNotification);
-        updateSenderNamePlaceholder();
-    }
-
-    if (!senderNameEditor.hasKeyboardFocus(true))
-    {
-        const auto currentName = processor.getSenderName();
-        if (senderNameEditor.getText() != currentName)
-            senderNameEditor.setText(currentName, false);
-    }
+    updateSenderEditorFromState();
 
     const auto recorderIsRecording = diagnostics.recorderState == dawstreamer::RecorderState::waitingForStreams
                                   || diagnostics.recorderState == dawstreamer::RecorderState::recording;
@@ -325,7 +335,6 @@ void DAWStreamerFenderEditor::timerCallback()
     {
         updateSenderDetails();
         modeBox.setEnabled(true);
-        roleBox.setEnabled(!recorderIsRecording);
         senderNameEditor.setEnabled(!recorderIsRecording);
     }
 
@@ -396,9 +405,9 @@ void DAWStreamerFenderEditor::updateMasterDetails(const RecorderEngine::Snapshot
     else if (audioOversized > 0 || snapshot.midi.oversizedEvents > 0)
         warning = "Oversized data detected";
     else if (duplicateClaims > 0)
-        warning = "Duplicate stream role detected";
+        warning = "Duplicate instance slot detected";
     else if (snapshot.midi.ignoredOtherRoleEvents > 0)
-        warning = "MIDI arrived from more than one stream role";
+        warning = "MIDI arrived from more than one instance slot";
     else if (snapshot.sessionActive && claimedStreams < 4)
         warning = "Waiting for " + juce::String(4 - claimedStreams) + " audio stream(s)";
 
@@ -462,7 +471,7 @@ void DAWStreamerFenderEditor::updateSenderDetails()
 
     juce::String state;
     if (!diagnostics.roleClaimed)
-        state = "CHANNEL CONFLICT";
+        state = "INSTANCE CONFLICT";
     else if (!diagnostics.recordingControlOnline)
         state = "MASTER OFFLINE";
     else if (recorderIsRecording)
@@ -483,7 +492,7 @@ void DAWStreamerFenderEditor::updateSenderDetails()
 
     juce::String warning;
     if (!diagnostics.roleClaimed)
-        warning = "This channel role is already claimed";
+        warning = "All four instance slots are already in use";
     else if (!diagnostics.recordingControlOnline)
         warning = "Master Recorder is not online";
     else if (!callbacksActive)
@@ -495,10 +504,7 @@ void DAWStreamerFenderEditor::updateSenderDetails()
 
     alert.setText(warning, juce::dontSendNotification);
 
-    const auto customName = processor.getSenderName();
-    const auto displayName = customName.isNotEmpty()
-        ? customName
-        : juce::String(dawstreamer::streamRoleName(diagnostics.streamRole));
+    const auto displayName = effectiveSenderName(processor);
 
     juce::String text;
     text << "Instance: " << displayName
