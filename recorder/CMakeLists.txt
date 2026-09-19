@@ -7,6 +7,8 @@ juce_add_gui_app(DAWStreamerRecorder
 target_sources(DAWStreamerRecorder
     PRIVATE
         Source/Main.cpp
+        Source/MidiFileExporter.cpp
+        Source/MidiFileExporter.h
         Source/RecorderEngine.cpp
         Source/RecorderEngine.h
 )
