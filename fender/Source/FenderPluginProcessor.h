@@ -11,6 +11,7 @@
 #include "SharedAudioTransport.h"
 #include "SharedMidiTransport.h"
 #include "SharedRecorderControl.h"
+#include "SharedStreamMetadata.h"
 
 class DAWStreamerFenderProcessor final : public juce::AudioProcessor,
                                          private juce::AudioProcessorParameter::Listener,
@@ -119,6 +120,9 @@ public:
     void setStreamRole(dawstreamer::StreamRole role) noexcept;
     dawstreamer::StreamRole getStreamRole() const noexcept;
 
+    void setSenderName(juce::String name);
+    juce::String getSenderName() const;
+
     void requestRecord() noexcept;
     void requestStop() noexcept;
 
@@ -129,6 +133,7 @@ public:
     bool hasEmbeddedRecorder() const noexcept;
     RecorderEngine::Snapshot getEmbeddedRecorderSnapshot() const;
 
+    juce::String getPublishedNameForRole(dawstreamer::StreamRole role) const;
     DiagnosticsSnapshot getDiagnosticsSnapshot() const noexcept;
 
 private:
@@ -139,11 +144,17 @@ private:
     void syncRecordingParameterFromRecorder(bool recording);
     void claimSelectedSenderRole() noexcept;
     void releaseSenderClaims() noexcept;
+    void publishSenderMetadata() noexcept;
+    void captureTakeStreamNames();
+    void renameFinishedTakeFiles(const RecorderEngine::Snapshot& snapshot);
+    static juce::String sanitiseStreamFileBaseName(juce::String name, dawstreamer::StreamRole fallbackRole);
     dawstreamer::SharedAudioTransport* transportForRole(dawstreamer::StreamRole role) const noexcept;
     dawstreamer::SharedMidiTransport* midiTransportForRole(dawstreamer::StreamRole role) const noexcept;
+    dawstreamer::SharedStreamMetadata* metadataForRole(dawstreamer::StreamRole role) const noexcept;
 
     std::array<std::unique_ptr<dawstreamer::SharedAudioTransport>, dawstreamer::kStreamRoleCount> audioTransports;
     std::array<std::unique_ptr<dawstreamer::SharedMidiTransport>, dawstreamer::kStreamRoleCount> midiTransports;
+    std::array<std::unique_ptr<dawstreamer::SharedStreamMetadata>, dawstreamer::kStreamRoleCount> streamMetadata;
     dawstreamer::SharedRecorderControl recorderControl;
     juce::AudioParameterBool* recordingParameter = nullptr;
 
@@ -152,10 +163,15 @@ private:
     std::uint64_t ownerToken = 0;
     std::uint64_t producerFrameCounter = 0;
 
+    mutable juce::CriticalSection senderNameLock;
+    juce::String configuredSenderName;
+
     mutable juce::CriticalSection masterConfigLock;
     juce::File configuredMasterOutputRoot;
     juce::String configuredMasterSessionName { "Show" };
     std::unique_ptr<RecorderEngine> embeddedRecorder;
+    bool previousEmbeddedSessionActive = false;
+    std::array<juce::String, dawstreamer::kStreamRoleCount> takeStreamFileBaseNames {};
 
     std::atomic<bool> suppressRecordingParameterCommand { false };
     std::atomic<bool> pendingRecordingCommand { false };
