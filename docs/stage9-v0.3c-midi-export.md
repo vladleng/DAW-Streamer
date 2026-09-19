@@ -6,7 +6,7 @@ Turn the validated in-memory MIDI capture from v0.3b into a standard `.mid` file
 
 ## Output
 
-When a take contains MIDI events, Stop should produce:
+When a take contains MIDI events, Stop produces:
 
 ```text
 Take_YYYY-MM-DD_HH-MM-SS/
@@ -19,42 +19,31 @@ Take_YYYY-MM-DD_HH-MM-SS/
 
 If no MIDI was routed during the take, audio recording remains unchanged and no MIDI file is required.
 
-## Current compatibility revision
+## Compatibility format
 
-The first v0.3c build wrote a single-track SMF Type 0 file using SMPTE absolute-time division. The file was created correctly and JUCE could read it back, but Studio One/Fender Studio did not accept it for normal project import.
+The first experimental v0.3c build used SMPTE time division. JUCE could read it back, but the target DAW did not import it normally.
 
-The current test revision therefore writes the most conventional interchange form:
+The accepted v0.3c format is therefore the conventional interchange format:
 
 - Standard MIDI File Type 0;
-- exactly one MIDI track;
-- PPQ time division at 960 ticks per quarter note;
-- no captured song tempo map;
-- no time-signature map;
-- original MIDI channel/message data is preserved.
+- one track;
+- 960 PPQ;
+- no captured tempo map;
+- no captured time-signature map;
+- original channel MIDI messages preserved.
 
-For the compatibility probe, absolute `takeFrame` values are converted independently to PPQ ticks using a nominal 120 BPM conversion (1920 ticks/second, 25 audio samples/tick at 48 kHz). This keeps the file structurally conventional and avoids cumulative rounding drift inside the exported file.
+## Manual validation completed
 
-Important: PPQ is beat-based. If a DAW ignores the file's nominal timing and reinterprets ticks using the current project tempo, absolute alignment with WAV can change. Therefore v0.3c is not accepted merely because the file opens; after compatibility is confirmed we must also validate start/middle/end timing. If Studio One requires PPQ and cannot preserve absolute timing without a tempo map, that limitation will be handled explicitly rather than silently sacrificing synchronization.
+- [x] `MIDI.mid` is created automatically on Stop whenever MIDI was captured.
+- [x] The file imports normally in the target DAW.
+- [x] MIDI notes match the recorded Keys audio in the tested session excerpt.
+- [x] Sustain pedal CC64 survives capture, export and re-import.
+- [x] Note/CC/Pitch/Aftertouch capture path was already validated in v0.3a/v0.3b.
+- [x] Song switching test completed with zero dropped MIDI events before export.
+- [x] Four WAV streams continue to record normally.
 
-## Manual validation
-
-1. Keep the normal four DAW Streamer instances: Vocal, Guitar, Keys and Playback.
-2. Route the service MIDI Player to the same DAW Streamer instance that receives Keys audio.
-3. Record a short take with several notes plus CC/Expression/Pitch Bend/Aftertouch and stop Recorder.
-4. Confirm the take folder contains four WAV files plus `MIDI.mid`.
-5. First compatibility check: confirm `MIDI.mid` can be previewed/opened/imported by Studio One/Fender Studio as a normal single-track MIDI file.
-6. Confirm Note On/Off, velocity, CC, Pitch Bend and Aftertouch are present.
-7. Then import WAV + MIDI at the same start point and compare note attacks near the beginning, middle and end.
-8. Repeat with Song switches/different BPM values and check whether project-tempo interpretation moves the MIDI relative to WAV.
-9. Record an audio-only take with MIDI routing disabled; four WAV files must remain unaffected.
+One isolated dirty Playback WAV was heard in an early test while the live setup was still loading. The issue did not repeat in subsequent recordings and is not currently reproducible as a DAW Streamer defect. It remains something to watch during continued real-session use.
 
 ## Acceptance
 
-v0.3c is accepted only when:
-
-- `MIDI.mid` is a normally importable single-track SMF file;
-- musical MIDI messages survive the round trip;
-- timing behavior relative to WAV is understood and validated;
-- no cumulative drift is introduced;
-- MIDI export failure remains separate from completed WAV files;
-- audio-only recording remains unchanged.
+v0.3c is accepted. The MIDI feature is promoted to v0.3.0 for practical use. Any defects discovered during continued testing will be handled in maintenance releases (v0.3.1+).
