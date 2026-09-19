@@ -8,6 +8,25 @@ bool recorderStateIsRecording(dawstreamer::RecorderState state) noexcept
     return state == dawstreamer::RecorderState::waitingForStreams
         || state == dawstreamer::RecorderState::recording;
 }
+
+DAWStreamerAudioProcessor::MidiMessageType classifyMidiMessage(const juce::MidiMessage& message) noexcept
+{
+    if (message.isNoteOn())
+        return DAWStreamerAudioProcessor::MidiMessageType::noteOn;
+    if (message.isNoteOff())
+        return DAWStreamerAudioProcessor::MidiMessageType::noteOff;
+    if (message.isController())
+        return DAWStreamerAudioProcessor::MidiMessageType::controller;
+    if (message.isPitchWheel())
+        return DAWStreamerAudioProcessor::MidiMessageType::pitchWheel;
+    if (message.isChannelPressure())
+        return DAWStreamerAudioProcessor::MidiMessageType::channelPressure;
+    if (message.isAftertouch())
+        return DAWStreamerAudioProcessor::MidiMessageType::polyAftertouch;
+    if (message.isProgramChange())
+        return DAWStreamerAudioProcessor::MidiMessageType::programChange;
+    return DAWStreamerAudioProcessor::MidiMessageType::other;
+}
 }
 
 DAWStreamerAudioProcessor::DAWStreamerAudioProcessor()
@@ -75,7 +94,7 @@ bool DAWStreamerAudioProcessor::isBusesLayoutSupported(const BusesLayout& layout
 }
 
 void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
-                                              juce::MidiBuffer&)
+                                              juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -83,6 +102,30 @@ void DAWStreamerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     currentNumSamples.store(buffer.getNumSamples(), std::memory_order_relaxed);
     currentInputChannels.store(getTotalNumInputChannels(), std::memory_order_relaxed);
     currentOutputChannels.store(getTotalNumOutputChannels(), std::memory_order_relaxed);
+
+    const auto midiCount = midiMessages.getNumEvents();
+    if (midiCount > 0)
+    {
+        midiInputSeen.store(true, std::memory_order_relaxed);
+        midiEventsLastBlock.store(midiCount, std::memory_order_relaxed);
+    }
+
+    for (const auto metadata : midiMessages)
+    {
+        const auto message = metadata.getMessage();
+        const auto type = classifyMidiMessage(message);
+        const auto* rawData = message.getRawData();
+        const auto rawSize = message.getRawDataSize();
+
+        midiEventCount.fetch_add(1, std::memory_order_relaxed);
+        lastMidiSampleOffset.store(metadata.samplePosition, std::memory_order_relaxed);
+        lastMidiMessageType.store(static_cast<int>(type), std::memory_order_relaxed);
+        lastMidiChannel.store(message.getChannel(), std::memory_order_relaxed);
+        lastMidiData1.store(rawSize > 1 ? static_cast<int>(rawData[1]) : 0,
+                            std::memory_order_relaxed);
+        lastMidiData2.store(rawSize > 2 ? static_cast<int>(rawData[2]) : 0,
+                            std::memory_order_relaxed);
+    }
 
     bool blockHasHostTime = false;
     std::int64_t blockHostTime = 0;
@@ -341,6 +384,16 @@ DAWStreamerAudioProcessor::DiagnosticsSnapshot DAWStreamerAudioProcessor::getDia
     result.inputChannels = currentInputChannels.load(std::memory_order_relaxed);
     result.outputChannels = currentOutputChannels.load(std::memory_order_relaxed);
 
+    result.midiInputSeen = midiInputSeen.load(std::memory_order_relaxed);
+    result.midiEventCount = midiEventCount.load(std::memory_order_relaxed);
+    result.midiEventsLastBlock = midiEventsLastBlock.load(std::memory_order_relaxed);
+    result.lastMidiSampleOffset = lastMidiSampleOffset.load(std::memory_order_relaxed);
+    result.lastMidiMessageType = static_cast<MidiMessageType>(
+        lastMidiMessageType.load(std::memory_order_relaxed));
+    result.lastMidiChannel = lastMidiChannel.load(std::memory_order_relaxed);
+    result.lastMidiData1 = lastMidiData1.load(std::memory_order_relaxed);
+    result.lastMidiData2 = lastMidiData2.load(std::memory_order_relaxed);
+
     result.streamRole = getStreamRole();
     if (auto* transport = transportForRole(result.streamRole))
     {
@@ -383,7 +436,7 @@ const juce::String DAWStreamerAudioProcessor::getName() const
 
 bool DAWStreamerAudioProcessor::acceptsMidi() const
 {
-    return false;
+    return true;
 }
 
 bool DAWStreamerAudioProcessor::producesMidi() const
