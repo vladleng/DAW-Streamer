@@ -1,6 +1,53 @@
 #include "PluginEditor.h"
 #include "RecordingTime.h"
 
+namespace
+{
+juce::String midiMessageSummary(const DAWStreamerAudioProcessor::DiagnosticsSnapshot& snapshot)
+{
+    using Type = DAWStreamerAudioProcessor::MidiMessageType;
+
+    if (!snapshot.midiInputSeen || snapshot.lastMidiMessageType == Type::none)
+        return "N/A";
+
+    const auto channel = snapshot.lastMidiChannel > 0
+        ? " ch " + juce::String(snapshot.lastMidiChannel)
+        : juce::String();
+
+    switch (snapshot.lastMidiMessageType)
+    {
+        case Type::noteOn:
+            return "Note On" + channel + " note " + juce::String(snapshot.lastMidiData1)
+                 + " vel " + juce::String(snapshot.lastMidiData2);
+        case Type::noteOff:
+            return "Note Off" + channel + " note " + juce::String(snapshot.lastMidiData1)
+                 + " vel " + juce::String(snapshot.lastMidiData2);
+        case Type::controller:
+            return "CC" + channel + " #" + juce::String(snapshot.lastMidiData1)
+                 + " = " + juce::String(snapshot.lastMidiData2);
+        case Type::pitchWheel:
+        {
+            const auto value = snapshot.lastMidiData1 + (snapshot.lastMidiData2 << 7);
+            return "Pitch" + channel + " = " + juce::String(value);
+        }
+        case Type::channelPressure:
+            return "Channel pressure" + channel + " = " + juce::String(snapshot.lastMidiData1);
+        case Type::polyAftertouch:
+            return "Aftertouch" + channel + " note " + juce::String(snapshot.lastMidiData1)
+                 + " = " + juce::String(snapshot.lastMidiData2);
+        case Type::programChange:
+            return "Program" + channel + " = " + juce::String(snapshot.lastMidiData1);
+        case Type::other:
+            return "Other MIDI" + channel + " data " + juce::String(snapshot.lastMidiData1)
+                 + ", " + juce::String(snapshot.lastMidiData2);
+        case Type::none:
+            break;
+    }
+
+    return "N/A";
+}
+}
+
 DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudioProcessor& processorToUse)
     : AudioProcessorEditor(processorToUse),
       processor(processorToUse)
@@ -37,7 +84,7 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
     };
     addAndMakeVisible(recordStopButton);
 
-    setSize(560, 650);
+    setSize(560, 780);
     snapshot = processor.getDiagnosticsSnapshot();
     previousProcessBlockCount = snapshot.processBlockCount;
     previousRecorderHeartbeat = snapshot.recorderHeartbeat;
@@ -102,7 +149,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer v0.2.0", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer v0.3a - MIDI source probe", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
@@ -142,6 +189,15 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     }
     drawLine("Host Recording", hostControlState);
 
+    drawLine("MIDI input", snapshot.midiInputSeen ? "RECEIVED" : "WAITING");
+    drawLine("MIDI events total", juce::String(snapshot.midiEventCount));
+    drawLine("Events in last MIDI block", juce::String(snapshot.midiEventsLastBlock));
+    drawLine("Last MIDI", midiMessageSummary(snapshot));
+    drawLine("MIDI sample offset",
+             snapshot.lastMidiSampleOffset >= 0
+                 ? juce::String(snapshot.lastMidiSampleOffset) + " samples"
+                 : juce::String("N/A"));
+
     drawLine("Role status", snapshot.roleClaimed ? "CLAIMED" : "DUPLICATE / NOT CLAIMED");
     drawLine("processBlock", callbacksActive ? "RUNNING" : "NO CALLBACKS");
     drawLine("Callback count", juce::String(snapshot.processBlockCount));
@@ -168,6 +224,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("Map the VST3 parameter 'Recording' to Performance Mode. Recorder remains authoritative.",
+    graphics.drawText("v0.3a only probes host MIDI input. MIDI is not recorded or written to disk yet.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }

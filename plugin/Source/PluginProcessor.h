@@ -15,6 +15,19 @@ class DAWStreamerAudioProcessor final : public juce::AudioProcessor,
                                         private juce::Timer
 {
 public:
+    enum class MidiMessageType : int
+    {
+        none = 0,
+        noteOn,
+        noteOff,
+        controller,
+        pitchWheel,
+        channelPressure,
+        polyAftertouch,
+        programChange,
+        other
+    };
+
     struct DiagnosticsSnapshot
     {
         std::uint64_t processBlockCount = 0;
@@ -40,6 +53,15 @@ public:
         int lastNumSamples = 0;
         int inputChannels = 0;
         int outputChannels = 0;
+
+        bool midiInputSeen = false;
+        std::uint64_t midiEventCount = 0;
+        int midiEventsLastBlock = 0;
+        int lastMidiSampleOffset = -1;
+        MidiMessageType lastMidiMessageType = MidiMessageType::none;
+        int lastMidiChannel = 0;
+        int lastMidiData1 = 0;
+        int lastMidiData2 = 0;
 
         dawstreamer::StreamRole streamRole = dawstreamer::StreamRole::Vocal;
         bool transportOpen = false;
@@ -138,6 +160,15 @@ private:
     std::atomic<int> currentNumSamples { 0 };
     std::atomic<int> currentInputChannels { 0 };
     std::atomic<int> currentOutputChannels { 0 };
+
+    std::atomic<bool> midiInputSeen { false };
+    std::atomic<std::uint64_t> midiEventCount { 0 };
+    std::atomic<int> midiEventsLastBlock { 0 };
+    std::atomic<int> lastMidiSampleOffset { -1 };
+    std::atomic<int> lastMidiMessageType { static_cast<int>(MidiMessageType::none) };
+    std::atomic<int> lastMidiChannel { 0 };
+    std::atomic<int> lastMidiData1 { 0 };
+    std::atomic<int> lastMidiData2 { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DAWStreamerAudioProcessor)
 };
