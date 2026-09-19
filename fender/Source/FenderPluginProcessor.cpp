@@ -4,7 +4,7 @@
 namespace
 {
 constexpr std::uint32_t kStateMagic = 0x44534631u; // DSF1
-constexpr std::uint32_t kStateVersion = 1u;
+constexpr std::uint32_t kStateVersion = 2u;
 
 bool recorderStateIsRecording(dawstreamer::RecorderState state) noexcept
 {
@@ -47,6 +47,7 @@ DAWStreamerFenderProcessor::DAWStreamerFenderProcessor()
         const auto role = static_cast<dawstreamer::StreamRole>(i);
         audioTransports[i] = std::make_unique<dawstreamer::SharedAudioTransport>(role);
         midiTransports[i] = std::make_unique<dawstreamer::SharedMidiTransport>(role);
+        streamMetadata[i] = std::make_unique<dawstreamer::SharedStreamMetadata>(role);
     }
 
     claimSelectedSenderRole();
@@ -268,10 +269,12 @@ bool DAWStreamerFenderProcessor::setPluginMode(PluginMode mode)
 
         embeddedRecorder = std::make_unique<RecorderEngine>(root);
         embeddedRecorder->setSessionName(session);
+        previousEmbeddedSessionActive = false;
         return true;
     }
 
     embeddedRecorder.reset();
+    previousEmbeddedSessionActive = false;
     pluginMode.store(static_cast<int>(PluginMode::sender), std::memory_order_release);
     claimSelectedSenderRole();
     return true;
@@ -299,6 +302,8 @@ void DAWStreamerFenderProcessor::setStreamRole(dawstreamer::StreamRole role) noe
         && oldIndex != newIndex)
     {
         const auto oldRoleIndex = static_cast<std::size_t>(oldIndex);
+        if (auto* oldMetadata = streamMetadata[oldRoleIndex].get())
+            oldMetadata->clearLabel(ownerToken);
         if (auto* oldTransport = audioTransports[oldRoleIndex].get())
             oldTransport->releaseProducer(ownerToken);
         if (auto* oldMidiTransport = midiTransports[oldRoleIndex].get())
@@ -316,6 +321,22 @@ dawstreamer::StreamRole DAWStreamerFenderProcessor::getStreamRole() const noexce
     return static_cast<dawstreamer::StreamRole>(index);
 }
 
+void DAWStreamerFenderProcessor::setSenderName(juce::String name)
+{
+    name = name.trim();
+    {
+        const juce::ScopedLock lock(senderNameLock);
+        configuredSenderName = std::move(name);
+    }
+    publishSenderMetadata();
+}
+
+juce::String DAWStreamerFenderProcessor::getSenderName() const
+{
+    const juce::ScopedLock lock(senderNameLock);
+    return configuredSenderName;
+}
+
 void DAWStreamerFenderProcessor::claimSelectedSenderRole() noexcept
 {
     if (getPluginMode() != PluginMode::sender)
@@ -329,21 +350,46 @@ void DAWStreamerFenderProcessor::claimSelectedSenderRole() noexcept
         transport->claimProducer(ownerToken);
     if (auto* midiTransport = midiTransports[index].get())
         midiTransport->claimProducer(ownerToken);
+
+    publishSenderMetadata();
 }
 
 void DAWStreamerFenderProcessor::releaseSenderClaims() noexcept
 {
-    for (auto& transport : audioTransports)
+    for (std::size_t i = 0; i < audioTransports.size(); ++i)
     {
-        if (transport != nullptr)
-            transport->releaseProducer(ownerToken);
+        if (streamMetadata[i] != nullptr)
+            streamMetadata[i]->clearLabel(ownerToken);
+        if (audioTransports[i] != nullptr)
+            audioTransports[i]->releaseProducer(ownerToken);
+        if (midiTransports[i] != nullptr)
+            midiTransports[i]->releaseProducer(ownerToken);
     }
+}
 
-    for (auto& transport : midiTransports)
+void DAWStreamerFenderProcessor::publishSenderMetadata() noexcept
+{
+    if (getPluginMode() != PluginMode::sender)
+        return;
+
+    const auto role = getStreamRole();
+    const auto index = static_cast<std::size_t>(role);
+    if (index >= audioTransports.size() || index >= streamMetadata.size())
+        return;
+
+    auto* transport = audioTransports[index].get();
+    auto* metadata = streamMetadata[index].get();
+    if (transport == nullptr || metadata == nullptr || !transport->producerClaimedBy(ownerToken))
+        return;
+
+    juce::String name;
     {
-        if (transport != nullptr)
-            transport->releaseProducer(ownerToken);
+        const juce::ScopedLock lock(senderNameLock);
+        name = configuredSenderName;
     }
+    const auto utf8 = name.toUTF8();
+    metadata->publishLabel(ownerToken,
+                           std::string_view(utf8.getAddress(), static_cast<std::size_t>(utf8.sizeInBytes() - 1)));
 }
 
 void DAWStreamerFenderProcessor::requestRecord() noexcept
@@ -409,6 +455,105 @@ RecorderEngine::Snapshot DAWStreamerFenderProcessor::getEmbeddedRecorderSnapshot
     return result;
 }
 
+juce::String DAWStreamerFenderProcessor::getPublishedNameForRole(dawstreamer::StreamRole role) const
+{
+    const auto index = static_cast<std::size_t>(role);
+    if (index >= streamMetadata.size())
+        return dawstreamer::streamRoleName(role);
+
+    const auto* transport = audioTransports[index].get();
+    const auto* metadata = streamMetadata[index].get();
+    if (transport == nullptr || metadata == nullptr)
+        return dawstreamer::streamRoleName(role);
+
+    const auto snapshot = metadata->snapshot();
+    const auto activeOwner = transport->producerOwner();
+    if (snapshot.open && activeOwner != 0 && snapshot.ownerToken == activeOwner && !snapshot.label.empty())
+        return juce::String::fromUTF8(snapshot.label.c_str());
+
+    return dawstreamer::streamRoleName(role);
+}
+
+void DAWStreamerFenderProcessor::captureTakeStreamNames()
+{
+    juce::StringArray used;
+    for (std::size_t i = 0; i < dawstreamer::kStreamRoleCount; ++i)
+    {
+        const auto role = static_cast<dawstreamer::StreamRole>(i);
+        auto base = sanitiseStreamFileBaseName(getPublishedNameForRole(role), role);
+        auto unique = base;
+        for (int suffix = 2; used.contains(unique, true); ++suffix)
+            unique = base + "-" + juce::String(suffix);
+        used.add(unique);
+        takeStreamFileBaseNames[i] = unique;
+    }
+}
+
+void DAWStreamerFenderProcessor::renameFinishedTakeFiles(const RecorderEngine::Snapshot& snapshot)
+{
+    if (snapshot.takeDirectory.isEmpty())
+        return;
+
+    const juce::File directory(snapshot.takeDirectory);
+    if (!directory.isDirectory())
+        return;
+
+    for (std::size_t i = 0; i < dawstreamer::kStreamRoleCount; ++i)
+    {
+        const auto role = static_cast<dawstreamer::StreamRole>(i);
+        const auto sourceBase = juce::String(dawstreamer::streamRoleName(role));
+        const auto destinationBase = takeStreamFileBaseNames[i].isNotEmpty()
+            ? takeStreamFileBaseNames[i]
+            : sourceBase;
+
+        if (destinationBase == sourceBase)
+            continue;
+
+        const auto source = directory.getChildFile(sourceBase + ".wav");
+        if (!source.existsAsFile())
+            continue;
+
+        auto destination = directory.getChildFile(destinationBase + ".wav");
+        if (destination.existsAsFile())
+        {
+            auto suffix = 2;
+            do
+            {
+                destination = directory.getChildFile(destinationBase + "-" + juce::String(suffix++) + ".wav");
+            }
+            while (destination.existsAsFile());
+        }
+
+        source.moveFileTo(destination);
+    }
+}
+
+juce::String DAWStreamerFenderProcessor::sanitiseStreamFileBaseName(
+    juce::String name,
+    dawstreamer::StreamRole fallbackRole)
+{
+    name = name.trim();
+    name = name.replaceCharacters("<>:\"/\\|?*", "_________");
+    name = name.replace("\r", "_").replace("\n", "_").replace("\t", "_");
+    while (name.endsWithChar('.'))
+        name = name.dropLastCharacters(1);
+    name = name.trim();
+
+    if (name.isEmpty())
+        name = dawstreamer::streamRoleName(fallbackRole);
+    if (name.length() > 80)
+        name = name.substring(0, 80).trim();
+
+    const auto upper = name.toUpperCase();
+    const auto numberedReserved = upper.length() == 4
+                               && (upper.startsWith("COM") || upper.startsWith("LPT"))
+                               && upper[3] >= '1' && upper[3] <= '9';
+    if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" || numberedReserved)
+        name = "_" + name;
+
+    return name;
+}
+
 void DAWStreamerFenderProcessor::parameterValueChanged(int parameterIndex, float newValue)
 {
     if (recordingParameter == nullptr
@@ -435,6 +580,16 @@ void DAWStreamerFenderProcessor::parameterGestureChanged(int, bool)
 
 void DAWStreamerFenderProcessor::timerCallback()
 {
+    if (embeddedRecorder != nullptr)
+    {
+        const auto embedded = embeddedRecorder->getSnapshot();
+        if (!previousEmbeddedSessionActive && embedded.sessionActive)
+            captureTakeStreamNames();
+        else if (previousEmbeddedSessionActive && !embedded.sessionActive)
+            renameFinishedTakeFiles(embedded);
+        previousEmbeddedSessionActive = embedded.sessionActive;
+    }
+
     const auto control = recorderControl.snapshot();
     const auto now = juce::Time::getMillisecondCounterHiRes();
 
@@ -508,6 +663,13 @@ dawstreamer::SharedMidiTransport* DAWStreamerFenderProcessor::midiTransportForRo
 {
     const auto index = static_cast<std::size_t>(role);
     return index < midiTransports.size() ? midiTransports[index].get() : nullptr;
+}
+
+dawstreamer::SharedStreamMetadata* DAWStreamerFenderProcessor::metadataForRole(
+    dawstreamer::StreamRole role) const noexcept
+{
+    const auto index = static_cast<std::size_t>(role);
+    return index < streamMetadata.size() ? streamMetadata[index].get() : nullptr;
 }
 
 DAWStreamerFenderProcessor::DiagnosticsSnapshot DAWStreamerFenderProcessor::getDiagnosticsSnapshot() const noexcept
@@ -649,6 +811,7 @@ void DAWStreamerFenderProcessor::getStateInformation(juce::MemoryBlock& destData
     output.writeInt(static_cast<int>(getStreamRole()));
     output.writeString(getMasterOutputRoot().getFullPathName());
     output.writeString(getMasterSessionName());
+    output.writeString(getSenderName());
 }
 
 void DAWStreamerFenderProcessor::setStateInformation(const void* data, int sizeInBytes)
@@ -659,13 +822,14 @@ void DAWStreamerFenderProcessor::setStateInformation(const void* data, int sizeI
     juce::MemoryInputStream input(data, static_cast<std::size_t>(sizeInBytes), false);
     const auto magic = static_cast<std::uint32_t>(input.readInt());
     const auto version = static_cast<std::uint32_t>(input.readInt());
-    if (magic != kStateMagic || version != kStateVersion)
+    if (magic != kStateMagic || version < 1u || version > kStateVersion)
         return;
 
     const auto modeValue = input.readInt();
     const auto roleValue = input.readInt();
     const auto outputRoot = input.readString();
     const auto sessionName = input.readString();
+    const auto senderName = version >= 2u ? input.readString() : juce::String();
 
     if (outputRoot.isNotEmpty())
         setMasterOutputRoot(juce::File(outputRoot));
@@ -673,6 +837,7 @@ void DAWStreamerFenderProcessor::setStateInformation(const void* data, int sizeI
 
     if (roleValue >= 0 && roleValue < static_cast<int>(dawstreamer::kStreamRoleCount))
         setStreamRole(static_cast<dawstreamer::StreamRole>(roleValue));
+    setSenderName(senderName);
 
     if (modeValue == static_cast<int>(PluginMode::masterRecorder))
         setPluginMode(PluginMode::masterRecorder);
