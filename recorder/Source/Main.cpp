@@ -35,7 +35,7 @@ public:
         title.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(title);
 
-        stage.setText("Version 0.3c - MIDI export compatibility test",
+        stage.setText("Version 0.3.0 - audio + MIDI capture",
                       juce::dontSendNotification);
         stage.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(stage);
@@ -365,7 +365,7 @@ public:
 
     const juce::String getApplicationVersion() override
     {
-        return "0.3c";
+        return "0.3.0";
     }
 
     bool moreThanOneInstanceAllowed() override
