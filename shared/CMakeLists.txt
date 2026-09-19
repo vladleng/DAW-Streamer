@@ -10,6 +10,8 @@ add_library(DAWStreamerShared STATIC
     Source/SharedMidiTransport.h
     Source/SharedRecorderControl.cpp
     Source/SharedRecorderControl.h
+    Source/SharedStreamMetadata.cpp
+    Source/SharedStreamMetadata.h
 )
 
 target_include_directories(DAWStreamerShared
