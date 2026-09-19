@@ -23,6 +23,7 @@ private:
     void chooseOutputFolder();
     void updateControlVisibility();
     void updateLayoutSize();
+    void updateSenderNamePlaceholder();
     void updateMasterDetails(const RecorderEngine::Snapshot& snapshot, double nowMs);
     void updateSenderDetails();
 
@@ -42,6 +43,7 @@ private:
 
     juce::ComboBox modeBox;
     juce::ComboBox roleBox;
+    juce::TextEditor senderNameEditor;
     juce::TextEditor sessionEditor;
     juce::TextButton browseButton { "Choose folder..." };
     juce::TextButton recordStopButton { "Record" };
