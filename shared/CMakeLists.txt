@@ -6,6 +6,8 @@ add_library(DAWStreamerShared STATIC
     Source/RecordingTime.h
     Source/SharedAudioTransport.cpp
     Source/SharedAudioTransport.h
+    Source/SharedMidiTransport.cpp
+    Source/SharedMidiTransport.h
     Source/SharedRecorderControl.cpp
     Source/SharedRecorderControl.h
 )
