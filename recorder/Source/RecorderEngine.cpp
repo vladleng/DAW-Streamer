@@ -7,6 +7,8 @@ namespace
 {
 constexpr std::uint32_t kRequiredSampleRate = 48000;
 constexpr int kRequiredBitsPerSample = 24;
+constexpr const char* kBackendLockName = "DAWStreamer.RecorderBackend.v1";
+std::atomic<RecorderEngine*> gProcessRecorderOwner { nullptr };
 }
 
 RecorderEngine::RecorderEngine(juce::File outputRootToUse)
@@ -16,6 +18,33 @@ RecorderEngine::RecorderEngine(juce::File outputRootToUse)
         ? std::move(outputRootToUse)
         : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
               .getChildFile("DAW Streamer Recordings");
+
+    RecorderEngine* expectedOwner = nullptr;
+    if (!gProcessRecorderOwner.compare_exchange_strong(expectedOwner,
+                                                       this,
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_acquire))
+    {
+        lastError = "Another DAW Streamer recorder backend is already active in this process.";
+        publishSnapshot();
+        return;
+    }
+    processOwnerInternal = true;
+
+    backendLock = std::make_unique<juce::InterProcessLock>(kBackendLockName);
+    if (backendLock == nullptr || !backendLock->enter(0))
+    {
+        lastError = "Another DAW Streamer recorder backend is already active.";
+        RecorderEngine* self = this;
+        gProcessRecorderOwner.compare_exchange_strong(self,
+                                                      nullptr,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_acquire);
+        processOwnerInternal = false;
+        publishSnapshot();
+        return;
+    }
+    backendOwnerInternal = true;
 
     for (std::size_t i = 0; i < streams.size(); ++i)
     {
@@ -32,20 +61,39 @@ RecorderEngine::RecorderEngine(juce::File outputRootToUse)
 
 RecorderEngine::~RecorderEngine()
 {
-    signalThreadShouldExit();
-    waitForThreadToExit(5000);
-    closeWriters(false);
-    recorderControl.publishOffline();
+    if (backendOwnerInternal)
+    {
+        signalThreadShouldExit();
+        waitForThreadToExit(5000);
+        closeWriters(false);
+        recorderControl.publishOffline();
+
+        if (backendLock != nullptr)
+            backendLock->exit();
+        backendOwnerInternal = false;
+    }
+
+    if (processOwnerInternal)
+    {
+        RecorderEngine* self = this;
+        gProcessRecorderOwner.compare_exchange_strong(self,
+                                                      nullptr,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_acquire);
+        processOwnerInternal = false;
+    }
 }
 
 void RecorderEngine::startRecording() noexcept
 {
-    pendingCommand.store(static_cast<int>(Command::start), std::memory_order_release);
+    if (backendOwnerInternal)
+        pendingCommand.store(static_cast<int>(Command::start), std::memory_order_release);
 }
 
 void RecorderEngine::stopRecording() noexcept
 {
-    pendingCommand.store(static_cast<int>(Command::stop), std::memory_order_release);
+    if (backendOwnerInternal)
+        pendingCommand.store(static_cast<int>(Command::stop), std::memory_order_release);
 }
 
 RecorderEngine::Snapshot RecorderEngine::getSnapshot() const
@@ -670,6 +718,7 @@ void RecorderEngine::failTake(const juce::String& message)
 void RecorderEngine::publishSnapshot()
 {
     Snapshot result;
+    result.backendOwner = backendOwnerInternal;
     result.sessionActive = sessionActiveInternal;
     result.waitingForStreams = waitingForStreamsInternal;
     result.takeFrames = globalTakeFrontier;
@@ -743,7 +792,8 @@ void RecorderEngine::publishSnapshot()
         }
     }
 
-    recorderControl.publishState(currentSharedState(), globalTakeFrontier);
+    if (backendOwnerInternal)
+        recorderControl.publishState(currentSharedState(), globalTakeFrontier);
 
     const juce::ScopedLock lock(snapshotLock);
     publishedSnapshot = std::move(result);
