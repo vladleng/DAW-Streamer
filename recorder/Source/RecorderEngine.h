@@ -9,6 +9,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 
+#include "MidiFileExporter.h"
 #include "SharedAudioTransport.h"
 #include "SharedMidiTransport.h"
 #include "SharedRecorderControl.h"
@@ -50,6 +51,9 @@ public:
         std::uint64_t lastTakeFrame = 0;
         std::uint32_t lastMessageSize = 0;
         std::array<std::uint8_t, 3> lastMessageBytes {};
+        bool fileWritten = false;
+        juce::String filePath;
+        juce::String exportError;
     };
 
     struct Snapshot
@@ -107,14 +111,6 @@ private:
         float peakLinear = 0.0f;
     };
 
-    struct CapturedMidiEvent
-    {
-        std::uint64_t takeFrame = 0;
-        dawstreamer::StreamRole sourceRole = dawstreamer::StreamRole::Keys;
-        std::uint32_t size = 0;
-        std::array<std::uint8_t, dawstreamer::kMaxMidiMessageBytes> data {};
-    };
-
     void run() override;
     void handleCommand(Command command);
     void handleSharedControlCommand();
@@ -125,6 +121,7 @@ private:
     void drainPendingMidiForStop();
     void drainMidiEvents(std::size_t streamIndex, std::uint32_t maximumEvents);
     void handleMidiEvent(std::size_t streamIndex, const dawstreamer::MidiEvent& event);
+    void exportMidiTake();
     bool startStreamFromFirstBlock(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
     bool allStreamsStarted() const noexcept;
     bool openWriter(std::size_t streamIndex, const dawstreamer::AudioBlock& firstBlock);
@@ -138,7 +135,7 @@ private:
 
     std::array<StreamState, dawstreamer::kStreamRoleCount> streams;
     std::array<float, dawstreamer::kMaxFramesPerBlock> silenceBuffer {};
-    std::vector<CapturedMidiEvent> capturedMidiEvents;
+    std::vector<dawstreamer::RecordedMidiEvent> capturedMidiEvents;
     dawstreamer::SharedRecorderControl recorderControl;
 
     std::atomic<int> pendingCommand { static_cast<int>(Command::none) };
@@ -157,6 +154,9 @@ private:
     std::uint64_t midiLastTakeFrameInternal = 0;
     std::uint32_t midiLastMessageSizeInternal = 0;
     std::array<std::uint8_t, 3> midiLastMessageBytesInternal {};
+    bool midiFileWrittenInternal = false;
+    juce::String midiFilePathInternal;
+    juce::String midiExportErrorInternal;
     juce::File takeDirectory;
     juce::String lastError;
 
