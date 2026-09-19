@@ -22,6 +22,7 @@ private:
     void timerCallback() override;
     void chooseOutputFolder();
     void updateControlVisibility();
+    void updateLayoutSize();
     void updateMasterDetails(const RecorderEngine::Snapshot& snapshot, double nowMs);
     void updateSenderDetails();
 
@@ -42,10 +43,17 @@ private:
     juce::ComboBox modeBox;
     juce::ComboBox roleBox;
     juce::TextEditor sessionEditor;
-    juce::TextButton browseButton { "Choose..." };
+    juce::TextButton browseButton { "Choose folder..." };
     juce::TextButton recordStopButton { "Record" };
+    juce::TextButton detailsButton { "Details" };
+    juce::TextButton setupButton { "Setup" };
+
     juce::Label status;
     juce::Label recordingTime;
+    juce::Label audioHealth;
+    juce::Label midiHealth;
+    juce::Label masterHealth;
+    juce::Label alert;
     juce::Label details;
     juce::Label outputPath;
     juce::Label takePath;
