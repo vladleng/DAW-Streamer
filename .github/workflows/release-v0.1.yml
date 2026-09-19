@@ -1,0 +1,70 @@
+name: Publish DAW Streamer v0.1
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: startsWith(github.event.head_commit.message, 'Publish DAW Streamer v0.1')
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset windows-x64
+
+      - name: Build Release
+        run: cmake --build --preset windows-x64-release
+
+      - name: Test Release
+        run: ctest --preset windows-x64-release --output-on-failure
+
+      - name: Package Windows x64 release
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $PWD 'release/package'
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+
+          $plugin = Get-ChildItem -Path 'build/windows-x64' -Recurse -Directory -Filter 'DAW Streamer.vst3' | Select-Object -First 1
+          if (-not $plugin) {
+            throw 'DAW Streamer.vst3 was not found after build.'
+          }
+
+          Copy-Item -Path $plugin.FullName -Destination $packageDir -Recurse
+          Copy-Item -Path 'README.md' -Destination (Join-Path $packageDir 'README.md')
+
+          $archive = Join-Path $PWD 'release/DAW-Streamer-v0.1-windows-x64.zip'
+          if (Test-Path $archive) { Remove-Item $archive -Force }
+          Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath $archive -CompressionLevel Optimal
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.1 `
+            'release/DAW-Streamer-v0.1-windows-x64.zip#Windows x64 build' `
+            --title 'DAW Streamer v0.1' `
+            --notes-file 'docs/release-v0.1.md' `
+            --target $env:GITHUB_SHA
+
+      - name: Remove previous releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tags = gh release list --limit 100 --json tagName --jq '.[].tagName'
+          foreach ($tag in $tags) {
+            if ($tag -and $tag -ne 'v0.1') {
+              gh release delete $tag --yes --cleanup-tag
+            }
+          }

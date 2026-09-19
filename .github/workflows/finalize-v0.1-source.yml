@@ -1,0 +1,59 @@
+name: Finalize DAW Streamer v0.1 source
+
+on:
+  push:
+    branches:
+      - fender-v0.1a-embedded-master
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.event.head_commit.message == 'Prepare DAW Streamer v0.1 release'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply final UI branding
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('fender/Source/FenderPluginEditor.cpp')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    graphics.fillAll(juce::Colour(0xff17191c));
+    graphics.setColour(juce::Colours::white);
+    graphics.setFont(20.0f);
+    graphics.drawText("DAW Streamer 0.1c", 24, 14, getWidth() - 48, 30,
+                      juce::Justification::centredLeft);'''
+
+          new = '''    graphics.fillAll(juce::Colour(0xff17191c));
+    graphics.setColour(juce::Colour(0xff7f858c));
+    graphics.setFont(10.0f);
+    graphics.drawText("Moon River Studio", 24, 2, getWidth() - 48, 16,
+                      juce::Justification::centredLeft);
+
+    graphics.setColour(juce::Colours::white);
+    graphics.setFont(20.0f);
+    graphics.drawText("DAW Streamer 0.1", 24, 16, getWidth() - 48, 30,
+                      juce::Justification::centredLeft);'''
+
+          if old not in text:
+              raise SystemExit('Expected v0.1c paint block was not found')
+
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Commit final branding
+        shell: bash
+        run: |
+          git config user.name "Vladislav"
+          git config user.email "vladislavpaderin@gmail.com"
+          git add fender/Source/FenderPluginEditor.cpp
+          git commit -m "Finalize DAW Streamer v0.1 UI branding"
+          git push origin HEAD:fender-v0.1a-embedded-master

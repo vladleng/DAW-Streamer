@@ -1,10 +1,10 @@
 juce_add_plugin(DAWStreamerFenderPlugin
     COMPANY_NAME "Moon River Studio"
-    BUNDLE_ID com.moonriverstudio.dawstreamerfender
+    BUNDLE_ID com.moonriverstudio.dawstreamer
     PLUGIN_MANUFACTURER_CODE MNRV
     PLUGIN_CODE DSFE
     FORMATS VST3
-    PRODUCT_NAME "DAW Streamer Fender"
+    PRODUCT_NAME "DAW Streamer"
     VERSION 0.1.0
     VST3_CATEGORIES Fx
     IS_SYNTH FALSE
