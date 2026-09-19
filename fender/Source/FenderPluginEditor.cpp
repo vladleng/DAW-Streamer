@@ -166,9 +166,14 @@ DAWStreamerFenderEditor::DAWStreamerFenderEditor(DAWStreamerFenderProcessor& pro
 void DAWStreamerFenderEditor::paint(juce::Graphics& graphics)
 {
     graphics.fillAll(juce::Colour(0xff17191c));
+    graphics.setColour(juce::Colour(0xff7f858c));
+    graphics.setFont(10.0f);
+    graphics.drawText("Moon River Studio", 24, 2, getWidth() - 48, 16,
+                      juce::Justification::centredLeft);
+
     graphics.setColour(juce::Colours::white);
     graphics.setFont(20.0f);
-    graphics.drawText("DAW Streamer 0.1c", 24, 14, getWidth() - 48, 30,
+    graphics.drawText("DAW Streamer 0.1", 24, 16, getWidth() - 48, 30,
                       juce::Justification::centredLeft);
 
     graphics.setFont(13.0f);
