@@ -56,9 +56,11 @@ MidiFileExportResult writeMidiTakeFile(const juce::File& takeDirectory,
     sequence.addEvent(endOfTrack);
     sequence.sort();
 
+    // Compatibility-first Standard MIDI File: one track, Type 0, conventional PPQ.
+    // We deliberately do not write a song tempo map or time-signature events here.
+    // Event positions are derived independently from the absolute take timeline.
     juce::MidiFile midiFile;
-    midiFile.setSmpteTimeFormat(kMidiFileSmpteFramesPerSecond,
-                                kMidiFileSmpteSubframesPerFrame);
+    midiFile.setTicksPerQuarterNote(kMidiFileTicksPerQuarterNote);
     midiFile.addTrack(sequence);
 
     result.file.deleteFile();
