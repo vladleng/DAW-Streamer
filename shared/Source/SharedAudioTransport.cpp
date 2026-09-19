@@ -108,13 +108,13 @@ const char* streamRoleName(StreamRole role) noexcept
 {
     switch (role)
     {
-        case StreamRole::Vocal: return "Vocal";
-        case StreamRole::Guitar: return "Guitar";
-        case StreamRole::Keys: return "Keys";
-        case StreamRole::Playback: return "Playback";
+        case StreamRole::Vocal: return "Inst 1";
+        case StreamRole::Guitar: return "Inst 2";
+        case StreamRole::Keys: return "Inst 3";
+        case StreamRole::Playback: return "Inst 4";
     }
 
-    return "Unknown";
+    return "Inst";
 }
 
 struct SharedAudioTransport::Impl

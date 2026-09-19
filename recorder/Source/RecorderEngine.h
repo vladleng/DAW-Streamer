@@ -58,6 +58,7 @@ public:
 
     struct Snapshot
     {
+        bool backendOwner = false;
         bool sessionActive = false;
         bool waitingForStreams = false;
         std::uint64_t takeFrames = 0;
@@ -137,6 +138,10 @@ private:
     std::array<float, dawstreamer::kMaxFramesPerBlock> silenceBuffer {};
     std::vector<dawstreamer::RecordedMidiEvent> capturedMidiEvents;
     dawstreamer::SharedRecorderControl recorderControl;
+
+    std::unique_ptr<juce::InterProcessLock> backendLock;
+    bool processOwnerInternal = false;
+    bool backendOwnerInternal = false;
 
     std::atomic<int> pendingCommand { static_cast<int>(Command::none) };
     std::uint64_t lastSharedCommandWord = 0;
