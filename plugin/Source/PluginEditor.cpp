@@ -84,7 +84,7 @@ DAWStreamerAudioProcessorEditor::DAWStreamerAudioProcessorEditor(DAWStreamerAudi
     };
     addAndMakeVisible(recordStopButton);
 
-    setSize(560, 780);
+    setSize(560, 870);
     snapshot = processor.getDiagnosticsSnapshot();
     previousProcessBlockCount = snapshot.processBlockCount;
     previousRecorderHeartbeat = snapshot.recorderHeartbeat;
@@ -149,7 +149,7 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colours::white);
 
     graphics.setFont(22.0f);
-    graphics.drawText("DAW Streamer v0.3a - MIDI source probe", 20, 16, getWidth() - 40, 32,
+    graphics.drawText("DAW Streamer v0.3b - MIDI capture", 20, 16, getWidth() - 40, 32,
                       juce::Justification::centredLeft);
 
     graphics.setFont(15.0f);
@@ -197,6 +197,13 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
              snapshot.lastMidiSampleOffset >= 0
                  ? juce::String(snapshot.lastMidiSampleOffset) + " samples"
                  : juce::String("N/A"));
+    drawLine("MIDI IPC",
+             snapshot.midiTransportOpen && snapshot.midiRoleClaimed
+                 ? juce::String("CLAIMED")
+                 : juce::String("NOT CLAIMED"));
+    drawLine("MIDI queue", juce::String(snapshot.midiPendingEvents));
+    drawLine("MIDI dropped", juce::String(snapshot.midiDroppedEvents));
+    drawLine("MIDI oversized", juce::String(snapshot.midiOversizedEvents));
 
     drawLine("Role status", snapshot.roleClaimed ? "CLAIMED" : "DUPLICATE / NOT CLAIMED");
     drawLine("processBlock", callbacksActive ? "RUNNING" : "NO CALLBACKS");
@@ -224,6 +231,6 @@ void DAWStreamerAudioProcessorEditor::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(0xff8d949d));
     graphics.setFont(13.0f);
-    graphics.drawText("v0.3a only probes host MIDI input. MIDI is not recorded or written to disk yet.",
+    graphics.drawText("v0.3b captures MIDI in Recorder memory on the shared take timeline. No .mid export yet.",
                       20, getHeight() - 36, getWidth() - 40, 22, juce::Justification::centredLeft);
 }
