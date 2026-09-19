@@ -12,10 +12,10 @@
 namespace dawstreamer
 {
 inline constexpr std::uint32_t kMidiFileSourceSampleRate = 48000;
-inline constexpr int kMidiFileSmpteFramesPerSecond = 30;
-inline constexpr int kMidiFileSmpteSubframesPerFrame = 200;
+inline constexpr int kMidiFileTicksPerQuarterNote = 960;
+inline constexpr double kMidiFileNominalBpm = 120.0;
 inline constexpr double kMidiFileTicksPerSecond =
-    static_cast<double>(kMidiFileSmpteFramesPerSecond * kMidiFileSmpteSubframesPerFrame);
+    static_cast<double>(kMidiFileTicksPerQuarterNote) * kMidiFileNominalBpm / 60.0;
 inline constexpr double kMidiFileSamplesPerTick =
     static_cast<double>(kMidiFileSourceSampleRate) / kMidiFileTicksPerSecond;
 
