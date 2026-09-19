@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    if: github.event_name == 'push' && github.event.head_commit.message == 'Publish v0.3.0 release'
+    if: github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Publish v0.3.0 release')
     runs-on: windows-2022
 
     steps:
@@ -64,7 +64,7 @@ jobs:
             'DAW-Streamer-v0.3.0-windows-x64.zip#Windows x64 build'
 
   sync-notes:
-    if: (github.event_name == 'push' && github.event.head_commit.message == 'Refresh v0.3.0 release notes') || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Refresh v0.3.0 release notes')) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
