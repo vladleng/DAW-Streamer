@@ -45,6 +45,7 @@ target_link_libraries(DAWStreamerFenderPlugin
         DAWStreamerShared
         juce::juce_audio_formats
         juce::juce_audio_utils
+        juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
