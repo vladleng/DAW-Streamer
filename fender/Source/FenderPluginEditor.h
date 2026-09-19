@@ -23,7 +23,7 @@ private:
     void chooseOutputFolder();
     void updateControlVisibility();
     void updateLayoutSize();
-    void updateSenderNamePlaceholder();
+    void updateSenderEditorFromState();
     void updateMasterDetails(const RecorderEngine::Snapshot& snapshot, double nowMs);
     void updateSenderDetails();
 
@@ -42,7 +42,6 @@ private:
     std::array<double, dawstreamer::kStreamRoleCount> lastCallbackChangeMs {};
 
     juce::ComboBox modeBox;
-    juce::ComboBox roleBox;
     juce::TextEditor senderNameEditor;
     juce::TextEditor sessionEditor;
     juce::TextButton browseButton { "Choose folder..." };
