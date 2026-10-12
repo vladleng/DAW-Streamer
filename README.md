@@ -1,5 +1,8 @@
 # DAW Streamer
 
+> **Текущий публичный релиз — v0.1 (Embedded Master Recorder).** После длительного live-теста обнаружена повторяющаяся общая тишина ~2–3 секунды одновременно во всех четырёх WAV и отдельные аудиоартефакты. Стабильность пока **не подтверждена**: [issue #34](https://github.com/vladleng/DAW-Streamer/issues/34), [60-минутный gate #31](https://github.com/vladleng/DAW-Streamer/issues/31). До исправления v0.1.1 не начинать v0.2 Dynamic Instances.
+
+**Для нового рабочего чата / Codex:** [AGENTS.md](AGENTS.md) → [docs/current-handoff.md](docs/current-handoff.md) → [актуальная архитектура](docs/architecture.md) → [сборка и тесты](docs/build.md) → [roadmap](docs/roadmap.md) / [#33](https://github.com/vladleng/DAW-Streamer/issues/33). Старые `docs/stage*.md` и `docs/release-v0.2.0.md`/`release-v0.3.0.md` — исторические документы прежнего standalone-цикла, не текущие версии или инструкции к установке.
 DAW Streamer — VST3-плагин для непрерывной синхронной записи нескольких аудиопотоков и MIDI прямо из live-host/DAW без запуска второй DAW для записи.
 
 Проект создан Moon River Studio и изначально разрабатывался для практической работы в Fender Studio Pro / Studio One Show Page, где важно сохранять отдельные сигналы всего выступления независимо от переключения Songs и Play/Stop транспорта. При этом основная архитектура использует обычный VST3 и Windows shared memory и не требует Fender-specific API.
