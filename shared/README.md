@@ -1,7 +1,13 @@
-# Общий протокол
+# shared/ — рабочие IPC-компоненты v0.1
 
-Здесь будут общие определения протокола, идентификаторов, блоков аудио, команд и состояний. Сейчас реализации нет.
+**Реализованы и используются действующим VST3**, а не только запланированы:
 
-Изменения формата должны сопровождаться версионированием и проверками совместимости. Необходимо определить размеры и пределы данных и правила работы общей памяти.
+- `SharedAudioTransport.*` — четыре bounded SPSC shared-memory audio rings, sequence/producer-frame metadata, Drop/oversize;
+- `SharedMidiTransport.*` — отдельный MIDI event transport;
+- `SharedRecorderControl.*` — Record/Stop и authoritative shared state;
+- `SharedStreamMetadata.*` — пользовательские имена Sender;
+- `RecordingTime.h` — общее форматирование длительности.
 
-См. [архитектуру](../docs/architecture.md).
+Текущая работа #34 касается в том числе транспортных потерь и временной шкалы. Не менять shared ABI и realtime path без теста на обратную совместимость и подтверждённой причины.
+
+[Актуальная архитектура](../docs/architecture.md) · [Технический handoff](../docs/current-handoff.md)
