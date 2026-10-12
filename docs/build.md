@@ -1,67 +1,26 @@
-# Воспроизводимая сборка DAW Streamer
+# DAW Streamer — текущая сборка и тестирование
 
-Статус: правила сборки для версии 0.1. Команды начнут собирать рабочие артефакты после появления корневого `CMakeLists.txt` и исходного кода.
+> **Актуально для основного релиза v0.1 / maintenance v0.1.1 (2026-10-12).** Прежние standalone цели оставлены в исходниках исторически. Для технического контекста см. [current-handoff.md](current-handoff.md).
 
-## Целевая платформа
+## Платформа и toolchain
 
-- Windows 11 x64.
-- C++20.
-- Visual Studio 2022 17.14, toolset MSVC v143.
-- CMake 4.4.3 как проверенная версия; проект должен объявлять минимально необходимую версию CMake отдельно в `CMakeLists.txt`.
-- JUCE 9.0.2, закреплённый на конкретном теге/коммите и подключённый как Git submodule в `external/JUCE`.
-- VST3 как единственный формат плагина версии 0.1.
-- Основной хост проверки: Fender Studio 8.1.2 (113407), Show Page.
-- Рабочая частота Show Page: 48 kHz.
-- Рабочий аудиобуфер на выступлениях: 128 samples.
-- Целевая конфигурация версии 0.1: 4 одновременно записываемых аудиопотока — голос, гитара, клавиши и плейбэк.
+- Windows 11 x64; C++20; Visual Studio 2022 17.14 / MSVC v143; CMake (в прошлых испытаниях использовалась 4.4.3).
+- CMake minimum 3.22 — как объявлено в текущем корневом `CMakeLists.txt`.
+- JUCE 9.0.2 через закреплённый Git submodule `external/JUCE`.
+- VST3, цель `DAWStreamerFenderPlugin` в `fender/CMakeLists.txt`; product name `DAW Streamer`.
+- Fender Studio Pro / Show Page — целевая ручная среда: 48 kHz, live device buffer 128; фактический callback в исторических тестах был 512 frames. Не фиксировать callback size.
+- Windows CI: `.github/workflows/build-windows.yml`; workflow публикации текущего `v0.1`: `.github/workflows/release-v0.1.yml`. **Не запускать публикацию/смену тегов при обычном bugfix.**
 
-Точный номер сборки Windows, Windows SDK и servicing-версия Visual Studio фиксируются после первой успешной сборки. Обновление toolchain или JUCE считается осознанным изменением и должно сопровождаться повторной сборкой и тестами.
-
-## Зависимости
-
-Версия 0.1 сознательно использует минимальный набор внешних зависимостей:
-
-- JUCE — VST3-обёртка, GUI рекордера, WAV и базовая инфраструктура приложения.
-- Win32 API — shared memory и системные примитивы межпроцессного взаимодействия.
-- стандартная библиотека C++20.
-
-Qt, Boost, PortAudio, RtAudio, libsndfile, FFmpeg, vcpkg и Conan в базовую сборку 0.1 не входят.
-
-## Получение исходников
-
-Репозиторий клонируется вместе с submodules:
+## Клонирование и обновление submodule
 
 ```powershell
 git clone --recurse-submodules https://github.com/vladleng/DAW-Streamer.git
 cd DAW-Streamer
-```
-
-Если репозиторий уже клонирован:
-
-```powershell
+# Для уже клонированного репозитория:
 git submodule update --init --recursive
 ```
 
-JUCE не должен автоматически следовать за `master`. Репозиторий DAW Streamer хранит конкретный commit submodule, поэтому одна и та же ревизия проекта получает одну и ту же версию JUCE.
-
-## Конфигурация CMake
-
-После создания каркаса проекта в корне должны находиться:
-
-- `CMakeLists.txt` — описание целей `plugin`, `recorder`, `shared` и `tests`;
-- `CMakePresets.json` — общие конфигурации сборки, хранящиеся в Git;
-- при необходимости `CMakeUserPresets.json` — локальные пути разработчика; файл не должен требоваться для стандартной сборки и не хранится в Git.
-
-Основной preset версии 0.1:
-
-- generator: Visual Studio 17 2022;
-- architecture: x64;
-- configuration: Debug или Release;
-- C++ standard: C++20.
-
-## Стандартные команды
-
-После появления CMake-каркаса стандартный путь сборки должен сводиться к следующим командам без ручной настройки проекта Visual Studio:
+## Configure → build → tests
 
 ```powershell
 cmake --preset windows-x64
@@ -69,54 +28,29 @@ cmake --build --preset windows-x64-release
 ctest --preset windows-x64-release --output-on-failure
 ```
 
-Для отладочной сборки используется соответствующий Debug preset.
+Для Debug: `cmake --build --preset windows-x64-debug` и `ctest --preset windows-x64-debug --output-on-failure`. Поскольку используется Visual Studio multi-config generator, `CMakePresets.json` задаёт конфигурацию в build/test preset.
 
-Если разработчику приходится вручную добавлять include-пути, библиотеки или параметры проекта в Visual Studio, сборка считается невоспроизводимой — необходимые настройки должны быть перенесены в CMake.
+Корневой CMake подключает **`shared`, `fender`, `tests`**. Не считать `plugin/` и `recorder/Source/Main.cpp` отдельными актуальными сборочными целями.
 
-## Ожидаемые артефакты
+## Артефакт текущего релиза
 
-Release-сборка должна формировать как минимум:
+- **`DAW Streamer.vst3`** — один plugin, режимы Sender / Master Recorder.
+- Отдельный `DAW Streamer Recorder.exe` в основном release v0.1 не поставляется.
+- Формат записи: 4 WAV, 24-bit PCM/48 kHz, mono/stereo плюс `MIDI.mid` (при наличии событий).
+- Текущий tag/release: `v0.1`, Windows x64 ZIP. В `.github/workflows/build-windows.yml` есть CI artifact `DAW-Streamer-v0.1-windows-x64`.
 
-- `DAW Streamer.vst3` — VST3 sender;
-- `DAW Streamer Recorder.exe` — отдельное приложение-рекордер;
-- тестовые executable/CTest targets, необходимые текущему этапу разработки.
+## Автотесты
 
-Точные каталоги вывода будут зафиксированы в CMake после создания первых целей.
+Список из `tests/CMakeLists.txt`:
+- `shared-audio-transport`
+- `shared-midi-transport`
+- `shared-recorder-control`
+- `recording-time-format`
+- `midi-file-export`
+- `recorder-stage5a1-startup`
 
-## Аудиоформат версии 0.1
+**Недостаток покрытия**: end-to-end длинный аудиотест с неравномерными очередями, пропущенными блоками, считыванием фактического sample content и MIDI alignment на 60 мин. Требуется для #34/#31. CI green не означает отсутствие выявленного пользователем общего WAV dropout.
 
-- Show Page и запись работают в 48 kHz — ресемплинг в рекордере не выполняется.
-- VST3-аудиобуфер передаётся между плагином и рекордером как float32.
-- На диск рекордер записывает 24-bit PCM WAV / 48 kHz.
-- Основной сценарий испытаний использует buffer size 128 samples.
-- Одновременно должны надёжно записываться 4 потока: голос, гитара, клавиши и плейбэк.
+## Правила изменения
 
-## Правило обновления зависимостей
-
-Обновление JUCE, CMake, MSVC toolset или Windows SDK выполняется отдельным осознанным изменением. После обновления необходимо:
-
-1. выполнить чистую Release-сборку;
-2. запустить CTest;
-3. проверить загрузку VST3 в целевом Show Page;
-4. выполнить текущий сквозной тест записи;
-5. обновить раздел `Проверенная среда` ниже.
-
-## Целевая и проверенная среда
-
-| Компонент | Версия / значение |
-| --- | --- |
-| Windows | Windows 11 x64 |
-| Fender Studio / Show Page | 8.1.2 (113407) |
-| Sample rate | 48 kHz |
-| Buffer size | 128 samples |
-| Одновременные аудиопотоки | 4 |
-| Visual Studio | 2022 17.14.x |
-| MSVC toolset | v143 |
-| Windows SDK | TBD после первой сборки |
-| CMake | 4.4.3 |
-| JUCE | 9.0.2 |
-| Architecture | x64 |
-
-После первого рабочего прототипа в этот раздел добавляются точный build Windows, Windows SDK и фактически проверенные servicing-версии toolchain.
-
-Цель этого документа — воспроизводимый процесс сборки, а не гарантия побитово идентичных бинарников между разными servicing-обновлениями компилятора и Windows SDK.
+Новые исправления делать отдельной веткой/PR, воспроизводить дефект тестом, сохранять real-time безопасность VST3. Изменения toolchain/JUCE/IPC ABI не смешивать с целевым bugfix без необходимости. Release только после ручной приёмки.
