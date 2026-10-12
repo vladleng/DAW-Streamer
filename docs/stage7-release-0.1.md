@@ -1,5 +1,8 @@
 # Stage 7 — Release 0.1
 
+> **ИСТОРИЧЕСКИЙ Stage 7** предыдущей standalone-архитектуры. Положительный результат старого теста не отменяет новых дефектов длинной записи [#34](https://github.com/vladleng/DAW-Streamer/issues/34). Актуальный план: [roadmap](roadmap.md), [handoff](current-handoff.md).
+
+
 ## Status
 
 Stage 6 has been accepted after real long-session testing. No recording defects were found in the target live workflow.
