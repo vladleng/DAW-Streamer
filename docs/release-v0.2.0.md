@@ -1,5 +1,8 @@
 # DAW Streamer v0.2.0
 
+> **ИСТОРИЧЕСКИЙ документ.** Это прежний релиз standalone Recorder до перехода на новый публичный `v0.1 Embedded Master Recorder`. Не использовать его как актуальные номера версии, инструкции установки или roadmap. См. [актуальный handoff](current-handoff.md).
+
+
 ## Release summary
 
 v0.2.0 is the first public-ready release of DAW Streamer after long-session validation and live workflow testing.
