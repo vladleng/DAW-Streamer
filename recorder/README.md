@@ -1,7 +1,7 @@
-# Рекордер
+# recorder/ — действующее ядро и исторический standalone frontend
 
-Здесь будет исходный код отдельного приложения для приёма потоков и записи WAV. Сейчас реализации нет.
+**`Source/RecorderEngine.{h,cpp}` и `Source/MidiFileExporter.*` активно используются в v0.1** и компилируются внутрь Master Recorder VST3 через `fender/CMakeLists.txt`.
 
-Приложение управляет сессией, временной шкалой, файлами и отображением ошибок. Дисковые операции выполняются вне аудиопотока DAW.
+**`Source/Main.cpp` — исторический frontend отдельного Recorder.exe**, который не входит в основной релиз v0.1. Не отлаживать #34 только в standalone-окне: действующая среда — встроенный Master VST3.
 
-См. [требования](../docs/requirements.md).
+Текущие проблемы многодорожечной записи: [issue #34](https://github.com/vladleng/DAW-Streamer/issues/34). См. [handoff](../docs/current-handoff.md), [архитектуру](../docs/architecture.md).
