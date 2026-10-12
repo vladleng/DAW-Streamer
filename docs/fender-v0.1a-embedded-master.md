@@ -1,5 +1,8 @@
 # DAW Streamer for Fender Studio v0.1a
 
+> **ИСТОРИЧЕСКИЙ прототип v0.1a**, предшествующий объединению в универсальный `DAW Streamer.vst3`. Название `DAW Streamer Fender.vst3` и обязательный ручной выбор ролей ниже не относятся к текущему релизу. См. [архитектуру](architecture.md) и [handoff](current-handoff.md).
+
+
 ## Purpose
 
 This branch adds a Fender Studio-oriented workflow without replacing or forking the universal DAW Streamer core.
