@@ -1,5 +1,8 @@
 # DAW Streamer v0.3.0
 
+> **ИСТОРИЧЕСКИЙ документ.** Это прежний релиз с отдельным Recorder до перехода на новый публичный `v0.1 Embedded Master Recorder`; MIDI уже включён в нынешний v0.1. См. [актуальный handoff](current-handoff.md).
+
+
 ## Release summary
 
 v0.3.0 adds MIDI performance capture to the existing synchronized multi-stream audio recorder while keeping the audio workflow unchanged.
